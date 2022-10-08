@@ -8,3 +8,8 @@
 /*.egg-info
 
 
+*.cfg
+*.log
+*.tif
+*.avi
+*.h5

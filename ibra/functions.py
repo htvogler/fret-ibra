@@ -311,7 +311,7 @@ def bleach_fit(brange,frange,intensity,fitter):
     elif (fitter == 'loess'):
         # Fitting loess model
         try:
-            _, pred, _ = loess_1d.loess_1d(brange, intensity_values, xnew=None, degree=1, frac=0.5, npoints=None, rotate=False, sigy=None)
+            _, pred, _ = loess_1d.loess_1d(brange, intensity_values, xnew=None, degree=3, frac=0.5, npoints=None, rotate=False, sigy=None)
         except:
             raise ValueError('Fit not found - try a larger range')
 

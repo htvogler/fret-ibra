@@ -13,3 +13,5 @@
 *.tif
 *.avi
 *.h5
+*.fig
+*.svg

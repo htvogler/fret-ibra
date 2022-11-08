@@ -7,4 +7,11 @@
 # Python egg metadata, regenerated from source files by setuptools.
 /*.egg-info
 
+*.cfg
+*.log
+*.tif
+*.fig
+*.svg
+*.avi
+*.h5
 

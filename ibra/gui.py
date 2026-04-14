@@ -44,7 +44,10 @@ def get_variables(dire,con_str,acc_str,don_str,range_str,res_str,par_state,nwind
 
         # Check the acceptor and donor stacks based on the run option
         assert(input_path == don_input_path or len(don_input_path) == 0), "Acceptor and Donor stacks must be in the same directory"
+        # Donor is only required for two-channel options; option 0 supports single-channel mode
         assert(len(don_input_path) > 0 or option == 0), "Run option requires Donor stack filename"
+
+        donor_filename = don_str.get()
 
         # Find the epsilon values
         if (len(eps_entry_str.get()) > 0):
@@ -82,6 +85,7 @@ def get_variables(dire,con_str,acc_str,don_str,range_str,res_str,par_state,nwind
             .replace("frames =", f"frames = {frames}")\
             .replace("resolution =", f"resolution = {resolution}")\
             .replace("parallel =", f"parallel = {parallel}")\
+            .replace("donor_filename =", f"donor_filename = {donor_filename}")\
             .replace("nwindow =", f"nwindow = {nwindow}")\
             .replace("eps =", f"eps = {eps}")\
             .replace("crop =", f"crop = {crop}")\
@@ -160,6 +164,7 @@ def main_gui():
     donor_entry = ttk.Entry(frm2, textvariable = don_str, width=50)
     donor_entry.grid(sticky="W", row=5, column=2)
     ttk.Button(frm2, text="Choose File", width=12, command=lambda:open_file(donor_entry,dire)).grid(sticky="W",row=5,column=3,padx=2)
+    tk.Label(frm2, text='(optional — leave empty for single-channel mode)', fg='grey', font=40).grid(sticky="W",row=5,column=4)
 
     frm_line1 = tk.Frame(root,padx=5,pady=1)
     frm_line1.pack(side="top", fill="x", expand=True)

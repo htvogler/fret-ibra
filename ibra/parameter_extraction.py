@@ -16,6 +16,10 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
     ext = config['File Parameters'].get('extension').encode("utf-8").decode()
     current_path = os.getcwd()
 
+    # Check for optional donor filename — if absent or empty, run in single-channel mode
+    donor_fname_raw = config['File Parameters'].get('donor_filename', '').encode("utf-8").decode().strip()
+    single_channel = (donor_fname_raw == '')
+
     # Finalize input/output paths
     if inp_path[:2] == '..':
         work_inp_path = current_path[:-5] + inp_path[2:]
@@ -54,6 +58,13 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
     assert (module >= 0), "option should be between 0 and 4"
     assert (module <= 4), "option should be between 0 and 4"
 
+    # Single-channel mode: reject modules that require a donor channel
+    if single_channel and module in (1, 2, 3):
+        raise ValueError(
+            "Donor filename is not set (single-channel mode) but option {} requires a donor channel. "
+            "Use option 0 for single-channel background subtraction.".format(module)
+        )
+
     # Input TIFF file resolution
     resolution = int(config['File Parameters'].get('resolution'))
     res_types = [8, 12, 16]
@@ -66,6 +77,12 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
 
     # Open log file
     logger = logit(work_out_path)
+
+    # Log whether running in single-channel or two-channel mode
+    if single_channel:
+        logger.info('Running in single-channel mode (no donor filename provided)')
+    else:
+        logger.info('Running in two-channel mode (donor: {})'.format(donor_fname_raw))
 
     # Background module options
     if (module <= 1 or module == 3):
@@ -82,7 +99,7 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
         # Run the background subtraction algorithm for either acceptor or donor stack
         if module <= 1:
             bs.background(verbose, logger, work_inp_path, work_out_path, ext, res, module, eps, win, parallel, anim_save,
-                      h5_save, tiff_save, frange)
+                      h5_save, tiff_save, frange, single_channel=single_channel)
         # Automated background + ratio modules
         elif module == 3:
             # Run the background subtraction algorithm for the acceptor stack
@@ -93,13 +110,13 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
             bs.background(verbose, logger, work_inp_path, work_out_path, ext, res, 1, eps, win, parallel, anim_save,
                           h5_save, tiff_save, frange)
 
-    # Ratio image module
+    # Ratio image module (two-channel only)
     if (module == 2 or module == 3):
         # Input crop dimensions
         crop = config['Ratio Parameters'].get('crop').split(',')
         crop = list(map(int, crop))
 
-        # Input options for image registration and the union between donor and accepter channels, and output option for saving in HDF5
+        # Input options for image registration and the union between donor and accepter channels
         register = config['Ratio Parameters'].getboolean('register')
         union = config['Ratio Parameters'].getboolean('union')
 
@@ -108,16 +125,22 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
 
     # Bleach correction module
     if (module == 4):
-        # Input the bleaching range for donor and accepter channels
+        # Input the bleaching range for the acceptor channel
         acceptor_bound = config['Bleach Parameters'].get('acceptor_bleach_range').split(':')
-        donor_bound = config['Bleach Parameters'].get('donor_bleach_range').split(':')
         acceptor_bound = list(map(int, acceptor_bound))
-        donor_bound = list(map(int, donor_bound))
 
         assert (acceptor_bound[1] >= acceptor_bound[
             0]), "acceptor_bleach_range last frame should be >= acceptor_bleach_range first frame"
-        assert (donor_bound[1] >= donor_bound[
-            0]), "donor_bleach_range last frame should be >= donor_bleach_range first frame"
+
+        # In single-channel mode, donor bleach correction is not applicable;
+        # passing [0, 0] causes rp.bleach() to skip the donor correction silently
+        if single_channel:
+            donor_bound = [0, 0]
+        else:
+            donor_bound = config['Bleach Parameters'].get('donor_bleach_range').split(':')
+            donor_bound = list(map(int, donor_bound))
+            assert (donor_bound[1] >= donor_bound[
+                0]), "donor_bleach_range last frame should be >= donor_bleach_range first frame"
 
         # Input bleach correction for fitting and correcting image median intensity
         fitter = config['Bleach Parameters'].get('fit')

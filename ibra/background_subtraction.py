@@ -236,9 +236,10 @@ class frame(stack):
         return (self.pos, self.im_frame_orig, self.XY_interp_back, self.im_frame, self.tile_prop, self.core_samples_mask, self.labels)
 
 
-def background(verbose,logger,work_inp_path,work_out_path,ext,res,module,eps,win,parallel,anim_save,h5_save,tiff_save,frange):
-    # Run through the donor/acceptor subtraction on a per frame basis
-    if module == 0:
+def background(verbose,logger,work_inp_path,work_out_path,ext,res,module,eps,win,parallel,anim_save,h5_save,tiff_save,frange,single_channel=False):
+    # Determine channel label from module and single_channel flag
+    # In single-channel mode, always label output 'acceptor' so downstream tools find it under the standard key
+    if single_channel or module == 0:
         val = 'acceptor'
     else:
         val = 'donor'

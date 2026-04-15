@@ -58,12 +58,16 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
     assert (module >= 0), "option should be between 0 and 4"
     assert (module <= 4), "option should be between 0 and 4"
 
-    # Single-channel mode: reject modules that require a donor channel
+    # Single-channel mode: warn if a two-channel module was selected
     if single_channel and module in (1, 2, 3):
-        raise ValueError(
-            "Donor filename is not set (single-channel mode) but option {} requires a donor channel. "
-            "Use option 0 for single-channel background subtraction.".format(module)
-        )
+        print("\nWarning: donor_filename is not set (single-channel mode) but option {} requires a donor channel.".format(module))
+        print("In single-channel mode only option 0 (background subtraction, acceptor) is valid.")
+        answer = input("Continue with option 0 instead? [y/n]: ").strip().lower()
+        if answer == 'y':
+            module = 0
+            logger.info('Single-channel mode: option overridden from {} to 0'.format(int(config['Modules'].get('option'))))
+        else:
+            raise SystemExit("Aborted. Please set option = 0 in your config file for single-channel mode.")
 
     # Input TIFF file resolution
     resolution = int(config['File Parameters'].get('resolution'))
@@ -73,7 +77,7 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
     res = np.power(2, resolution) - 1
 
     # Input parallel option
-    parallel = config['File Parameters'].getboolean('parallel')
+    parallel = config['File Parameters'].getboolean('parallel', fallback=False)
 
     # Open log file
     logger = logit(work_out_path)

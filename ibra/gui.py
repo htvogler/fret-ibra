@@ -8,7 +8,7 @@ from shutil import copyfile
 import parameter_extraction
 
 def open_file(arg,dire):
-    file = filedialog.askopenfilename(initialdir = dire,title = "Select file",filetypes = (("all files","*.*"),("tif files","*.tif"),("cfg files","*.cfg")))
+    file = filedialog.askopenfilename(initialdir = os.path.expanduser("~"),title = "Select file",filetypes = (("all files","*.*"),("tif files","*.tif"),("cfg files","*.cfg")))
     arg.delete(0,tk.END)
     arg.insert(0,file)
 
@@ -25,26 +25,31 @@ def get_variables(dire,con_str,acc_str,don_str,range_str,res_str,par_state,nwind
 
         # Input_path, filename and extension of acceptor channel
         acc = acc_str.get()
-        acc_posa = acc.find("acceptor")
-        acc_posl = [m.start() for m in re.finditer('/', acc[:acc_posa])]
-        acc_posd = acc.find(".")
+        input_path = os.path.dirname(acc)
+        acc_basename = os.path.basename(acc)
+        acc_posd = acc_basename.find(".")
+        extension = acc_basename[acc_posd+1:]
 
-        input_path = acc[:acc_posl[-1]]
-        filename = acc[acc_posl[-1]+1:acc_posa-1]
-        extension = acc[acc_posd+1:]
+        # Strip _acceptor suffix from filename stem if present, otherwise use full stem
+        acc_stem = acc_basename[:acc_posd]
+        if acc_stem.endswith('_acceptor'):
+            filename = acc_stem[:-9]
+        else:
+            filename = acc_stem
 
         # if donor path exists, find the input path of the donor channel
         if len(don_str.get()) > 0:
             don = don_str.get()
-            don_posa = don.find("acceptor")
-            don_posl = [m.start() for m in re.finditer('/', don[:don_posa])]
-            don_input_path = don[:don_posl[-1]]
+            don_input_path = os.path.dirname(don)
         else:
             don_input_path = ''
 
         # Check the acceptor and donor stacks based on the run option
         assert(input_path == don_input_path or len(don_input_path) == 0), "Acceptor and Donor stacks must be in the same directory"
-        assert(len(don_input_path) > 0 or option == 0), "Run option requires Donor stack filename"
+        # Donor is only required for two-channel options; options 0 and 4 support single-channel mode
+        assert(len(don_input_path) > 0 or option in (0, 4)), "Run option requires Donor stack filename"
+
+        second_channel = '1' if len(don_str.get()) > 0 else '0'
 
         # Find the epsilon values
         if (len(eps_entry_str.get()) > 0):
@@ -64,36 +69,48 @@ def get_variables(dire,con_str,acc_str,don_str,range_str,res_str,par_state,nwind
         donor_bleach_range = don_bleach_str.get()
         fit = bleach_fit.get()
 
-        # Create directory for config file and place empty config file in it
-        new_path = dire+'/'+filename
-        if not os.path.exists(new_path):
-            os.makedirs(new_path)
+        # Locate the blank Config_temp.cfg in the ibra source directory
+        template_path = os.path.join(dire, 'Config_temp.cfg')
+        assert os.path.exists(template_path), "Config_temp.cfg not found in ibra directory: {}".format(dire)
 
-        cfname = new_path+'/Config_'+filename+'.cfg'
-        copyfile('/'.join([dire,'Config_temp.cfg']),cfname)
+        # Save generated config into the experiment results folder
+        results_root = os.path.join(input_path, 'FRET-IBRA_results')
+        if not os.path.exists(results_root):
+            os.makedirs(results_root)
+        exp_path = os.path.join(results_root, filename)
+        if not os.path.exists(exp_path):
+            os.makedirs(exp_path)
 
-        # Fill config file with gui parameters
-        with open(cfname,'r') as f:
+        cfname = os.path.join(exp_path, 'Config_' + filename + '.cfg')
+
+        # Read blank template from source directory
+        with open(template_path, 'r') as f:
             filedata = f.read()
 
-        filedata = filedata.replace("input_path =",f"input_path = {input_path}")\
-            .replace("filename =",f"filename = {filename}")\
-            .replace("extension =", f"extension = {extension}")\
-            .replace("frames =", f"frames = {frames}")\
-            .replace("resolution =", f"resolution = {resolution}")\
-            .replace("parallel =", f"parallel = {parallel}")\
-            .replace("nwindow =", f"nwindow = {nwindow}")\
-            .replace("eps =", f"eps = {eps}")\
-            .replace("crop =", f"crop = {crop}")\
-            .replace("register =", f"register = {register}")\
-            .replace("union =", f"union = {union}")\
-            .replace("acceptor_bleach_range =", f"acceptor_bleach_range = {acceptor_bleach_range}") \
-            .replace("donor_bleach_range =", f"donor_bleach_range = {donor_bleach_range}") \
-            .replace("fit =", f"fit = {fit}")\
-            .replace("option =", f"option = {option}")
+        # Replace each key using regex — matches 'key = anything' to prevent doubling on re-runs
+        def cfg_sub(key, value, text):
+            return re.sub(r'(?m)^(' + re.escape(key) + r'\s*=).*$',
+                          r'\g<1> ' + str(value), text)
 
-        with open(cfname, 'w') as file:
-            file.write(filedata)
+        filedata = cfg_sub("input_path",           input_path,             filedata)
+        filedata = cfg_sub("filename",              filename,               filedata)
+        filedata = cfg_sub("extension",             extension,              filedata)
+        filedata = cfg_sub("second_channel",        second_channel,         filedata)
+        filedata = cfg_sub("frames",                frames,                 filedata)
+        filedata = cfg_sub("resolution",            resolution,             filedata)
+        filedata = cfg_sub("parallel",              parallel,               filedata)
+        filedata = cfg_sub("nwindow",               nwindow,                filedata)
+        filedata = cfg_sub("eps",                   eps,                    filedata)
+        filedata = cfg_sub("crop",                  crop,                   filedata)
+        filedata = cfg_sub("register",              register,               filedata)
+        filedata = cfg_sub("union",                 union,                  filedata)
+        filedata = cfg_sub("acceptor_bleach_range", acceptor_bleach_range,  filedata)
+        filedata = cfg_sub("donor_bleach_range",    donor_bleach_range,     filedata)
+        filedata = cfg_sub("fit",                   fit,                    filedata)
+        filedata = cfg_sub("option",                option,                 filedata)
+
+        with open(cfname, 'w') as f:
+            f.write(filedata)
 
         # Run pipeline using newly created config file
         parameter_extraction.main_extract(cfname,bool(tiff_state.get()),verbose,bool(h5_state.get()),bool(anim_state.get()))
@@ -160,6 +177,7 @@ def main_gui():
     donor_entry = ttk.Entry(frm2, textvariable = don_str, width=50)
     donor_entry.grid(sticky="W", row=5, column=2)
     ttk.Button(frm2, text="Choose File", width=12, command=lambda:open_file(donor_entry,dire)).grid(sticky="W",row=5,column=3,padx=2)
+    tk.Label(frm2, text='(optional — 1 = two-channel mode, 0 or empty = single-channel mode)', fg='grey', font=40).grid(sticky="W",row=5,column=4)
 
     frm_line1 = tk.Frame(root,padx=5,pady=1)
     frm_line1.pack(side="top", fill="x", expand=True)

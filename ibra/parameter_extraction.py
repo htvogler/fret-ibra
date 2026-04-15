@@ -16,6 +16,10 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
     ext = config['File Parameters'].get('extension').encode("utf-8").decode()
     current_path = os.getcwd()
 
+    # Check for optional donor filename — if absent or empty, run in single-channel mode
+    second_channel_raw = config['File Parameters'].get('second_channel', '').encode("utf-8").decode().strip()
+    single_channel = second_channel_raw.lower() in ('', '0', 'no', 'false', 'off')
+
     # Finalize input/output paths
     if inp_path[:2] == '..':
         work_inp_path = current_path[:-5] + inp_path[2:]
@@ -28,8 +32,13 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
     if not os.path.exists(work_inp_path):
         raise IOError("Input path does not exist")
 
+    # Create FRET-IBRA_results folder in the input directory if it doesn't exist
+    results_root = work_inp_path + '/FRET-IBRA_results'
+    if not os.path.exists(results_root):
+        os.makedirs(results_root)
+
     work_inp_path += '/' + fname
-    work_out_path = current_path + '/' + fname + '/'
+    work_out_path = results_root + '/' + fname + '/'
     if not os.path.exists(work_out_path):
         os.makedirs(work_out_path)
     work_out_path += fname
@@ -54,6 +63,17 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
     assert (module >= 0), "option should be between 0 and 4"
     assert (module <= 4), "option should be between 0 and 4"
 
+    # Single-channel mode: warn if a two-channel module was selected
+    if single_channel and module in (1, 2, 3):
+        print("\nWarning: second_channel is not set or set to 0 (single-channel mode) but option {} requires a donor channel.".format(module))
+        print("In single-channel mode only option 0 (background subtraction, acceptor) is valid.")
+        answer = input("Continue with option 0 instead? [y/n]: ").strip().lower()
+        if answer == 'y':
+            module = 0
+            logger.info('Single-channel mode: option overridden from {} to 0'.format(int(config['Modules'].get('option'))))
+        else:
+            raise SystemExit("Aborted. Please set option = 0 in your config file for single-channel mode.")
+
     # Input TIFF file resolution
     resolution = int(config['File Parameters'].get('resolution'))
     res_types = [8, 12, 16]
@@ -62,10 +82,35 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
     res = np.power(2, resolution) - 1
 
     # Input parallel option
-    parallel = config['File Parameters'].getboolean('parallel')
+    parallel_raw = config['File Parameters'].get('parallel', '').strip()
+    parallel = parallel_raw.lower() in ('1', 'yes', 'true', 'on')
 
     # Open log file
     logger = logit(work_out_path)
+
+    # Log whether running in single-channel or two-channel mode
+    if single_channel:
+        logger.info('Running in single-channel mode (second_channel not set or 0)')
+    else:
+        logger.info('Running in two-channel mode (second_channel = {})'.format(second_channel_raw))
+
+    # Module 3 runs the full pipeline from scratch — warn if existing HDF5 output files
+    # are present, since they may contain carefully tuned per-frame results
+    if module == 3 and h5_save:
+        existing = [f for f in (work_out_path + '_back.h5', work_out_path + '_ratio_back.h5')
+                    if os.path.exists(f)]
+        if existing:
+            print("\nWarning: the following output files already exist and will be overwritten by module 3:")
+            for f in existing:
+                print("  {}".format(f))
+            print("If you have tuned individual frames using modules 0 or 1, those results will be lost.")
+            answer = input("Continue and overwrite? [y/n]: ").strip().lower()
+            if answer == 'y':
+                for f in existing:
+                    os.remove(f)
+                    logger.info('Removed existing output file for fresh run: {}'.format(f))
+            else:
+                raise SystemExit("Aborted. Run modules 0, 1, 2 and 4 sequentially to preserve per-frame tuning.")
 
     # Background module options
     if (module <= 1 or module == 3):
@@ -82,7 +127,7 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
         # Run the background subtraction algorithm for either acceptor or donor stack
         if module <= 1:
             bs.background(verbose, logger, work_inp_path, work_out_path, ext, res, module, eps, win, parallel, anim_save,
-                      h5_save, tiff_save, frange)
+                      h5_save, tiff_save, frange, single_channel=single_channel)
         # Automated background + ratio modules
         elif module == 3:
             # Run the background subtraction algorithm for the acceptor stack
@@ -93,40 +138,53 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
             bs.background(verbose, logger, work_inp_path, work_out_path, ext, res, 1, eps, win, parallel, anim_save,
                           h5_save, tiff_save, frange)
 
-    # Ratio image module
+    # Ratio image module (two-channel only)
     if (module == 2 or module == 3):
         # Input crop dimensions
         crop = config['Ratio Parameters'].get('crop').split(',')
         crop = list(map(int, crop))
 
-        # Input options for image registration and the union between donor and accepter channels, and output option for saving in HDF5
-        register = config['Ratio Parameters'].getboolean('register')
-        union = config['Ratio Parameters'].getboolean('union')
+        # Input options for image registration and the union between donor and accepter channels
+        register_raw = config['Ratio Parameters'].get('register', '').strip()
+        register = register_raw.lower() in ('1', 'yes', 'true', 'on') if register_raw else True
+        union_raw = config['Ratio Parameters'].get('union', '').strip()
+        union = union_raw.lower() in ('1', 'yes', 'true', 'on') if union_raw else True
 
         # Run the ratio image processing algorithm
         rp.ratio(verbose, logger, work_out_path, crop, res, register, union, h5_save, tiff_save, frange)
 
     # Bleach correction module
     if (module == 4):
-        # Input the bleaching range for donor and accepter channels
-        acceptor_bound = config['Bleach Parameters'].get('acceptor_bleach_range').split(':')
-        donor_bound = config['Bleach Parameters'].get('donor_bleach_range').split(':')
-        acceptor_bound = list(map(int, acceptor_bound))
-        donor_bound = list(map(int, donor_bound))
-
+        # Input the bleaching range for the acceptor channel
+        acceptor_bleach_raw = config['Bleach Parameters'].get('acceptor_bleach_range', '').strip()
+        if not acceptor_bleach_raw or ':' not in acceptor_bleach_raw:
+            raise ValueError("acceptor_bleach_range must be set as a colon-separated range (e.g. 1:100) for bleach correction")
+        acceptor_bound = list(map(int, acceptor_bleach_raw.split(':')))
         assert (acceptor_bound[1] >= acceptor_bound[
             0]), "acceptor_bleach_range last frame should be >= acceptor_bleach_range first frame"
-        assert (donor_bound[1] >= donor_bound[
-            0]), "donor_bleach_range last frame should be >= donor_bleach_range first frame"
+        assert (acceptor_bound[1] <= len(frange)), "acceptor_bleach_range end frame exceeds number of processed frames"
+
+        # In single-channel mode, donor bleach correction is not applicable;
+        # passing [0, 0] causes rp.bleach() to skip the donor correction silently
+        if single_channel:
+            donor_bound = [0, 0]
+        else:
+            donor_bleach_raw = config['Bleach Parameters'].get('donor_bleach_range', '').strip()
+            if not donor_bleach_raw or ':' not in donor_bleach_raw:
+                raise ValueError("donor_bleach_range must be set as a colon-separated range (e.g. 1:100) for bleach correction")
+            donor_bound = list(map(int, donor_bleach_raw.split(':')))
+            assert (donor_bound[1] >= donor_bound[
+                0]), "donor_bleach_range last frame should be >= donor_bleach_range first frame"
+            assert (donor_bound[1] <= len(frange)), "donor_bleach_range end frame exceeds number of processed frames"
 
         # Input bleach correction for fitting and correcting image median intensity
-        fitter = config['Bleach Parameters'].get('fit')
+        fitter = config['Bleach Parameters'].get('fit', '').strip()
         fits = ['linear', 'exponential', 'loess']
-
-        assert (fitter in fits), "fit should be either linear, exponential or loess"
+        if fitter not in fits:
+            raise ValueError("fit must be set to one of: linear, exponential, loess")
 
         # Run bleach correction algorithm
-        rp.bleach(verbose, logger, work_out_path, acceptor_bound, donor_bound, fitter, h5_save, tiff_save, frange)
+        rp.bleach(verbose, logger, work_out_path, acceptor_bound, donor_bound, fitter, h5_save, tiff_save, frange, single_channel=single_channel)
 
     # Output message
     print ("Processing is complete")

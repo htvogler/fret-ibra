@@ -164,53 +164,50 @@ def logit(path):
 
 def h5(data,val,path,frange):
     """Saving the image stack as a .h5 file"""
-    f = h5py.File(path, 'a')
+    with h5py.File(path, 'a') as f:
 
-    if val in f:
-        # Open existing dataset
-        orig = f[val]
+        if val in f:
+            # Open existing dataset
+            orig = f[val]
 
-        if val in ('acceptor','acceptori','acceptorb'):
-            orange = f.attrs['acceptor_frange']
-        elif val in ('donor', 'donori', 'donorb'):
-            orange = f.attrs['donor_frange']
+            if val in ('acceptor','acceptori','acceptorb'):
+                orange = f.attrs['acceptor_frange']
+            elif val in ('donor', 'donori', 'donorb'):
+                orange = f.attrs['donor_frange']
+            else:
+                orange = f.attrs['ratio_frange']
+
+            # Create dictionaries of new and existing data
+            orig_dict = dict(zip(orange, orig))
+            new_dict = dict(zip(frange, data))
+
+            # Save and re-write data in the dictionary
+            for key in frange:
+                orig_dict[key] = new_dict[key]
+
+            # Sort frames by increasing frame number
+            orig_dict_sorted = sorted(orig_dict.items())
+            res_range, res = list(zip(*orig_dict_sorted))
+            res = np.array(res)
+
+            # Delete existing HDF5 dataset
+            if (val in f):
+                del f[val]
+
         else:
-            orange = f.attrs['ratio_frange']
+            # If no stack is present, create it
+            res = np.array(data)
+            res_range = frange
 
-        # Create dictionaries of new and existing data
-        orig_dict = dict(zip(orange, orig))
-        new_dict = dict(zip(frange, data))
-
-        # Save and re-write data in the dictionary
-        for key in frange:
-            orig_dict[key] = new_dict[key]
-
-        # Sort frames by increasing frame number
-        orig_dict_sorted = sorted(orig_dict.items())
-        res_range, res = list(zip(*orig_dict_sorted))
-        res = np.array(res)
-
-        # Delete existing HDF5 dataset
-        if (val in f):
-            del f[val]
-
-    else:
-        # If no stack is present, create it
-        res = np.array(data)
-        res_range = frange
-
-    # Save the image pixel data and frange
-    if val in ('acceptor','donor'):
-        f.create_dataset(val, data=res, shape=res.shape, dtype=np.uint16, compression='gzip')
-        f.attrs[val + '_frange'] = res_range
-    elif val == 'ratio':
-        f.create_dataset(val, data=res, shape=res.shape, dtype=np.uint8, compression='gzip')
-        f.attrs[val + '_frange'] = res_range
-    else:
-        f.create_dataset(val, data=res, shape=res.shape, dtype=np.float16, compression='gzip')
-
-    # Close dataset
-    f.close()
+        # Save the image pixel data and frange
+        if val in ('acceptor','donor'):
+            f.create_dataset(val, data=res, shape=res.shape, dtype=np.uint16, compression='gzip')
+            f.attrs[val + '_frange'] = res_range
+        elif val == 'ratio':
+            f.create_dataset(val, data=res, shape=res.shape, dtype=np.uint8, compression='gzip')
+            f.attrs[val + '_frange'] = res_range
+        else:
+            f.create_dataset(val, data=res, shape=res.shape, dtype=np.float16, compression='gzip')
 
 def time_evolution(acceptor,donor,work_out_path,name,ylabel,h5_save):
     """Median channel intensity per frame"""
@@ -236,17 +233,16 @@ def time_evolution(acceptor,donor,work_out_path,name,ylabel,h5_save):
         yd = np.array(yd)
 
         # Open HDF5 dataset
-        f = h5py.File(work_out_path+'_ratio_back.h5', 'a')
+        with h5py.File(work_out_path+'_ratio_back.h5', 'a') as f:
 
-        # Save dictionary data in HDF5 dataset
-        if (names[0] in f):
-            del f[names[0]]
-        f.create_dataset(names[0], data=ya, shape=ya.shape, dtype=np.uint16, compression='gzip')
+            # Save dictionary data in HDF5 dataset
+            if (names[0] in f):
+                del f[names[0]]
+            f.create_dataset(names[0], data=ya, shape=ya.shape, dtype=np.uint16, compression='gzip')
 
-        if (names[1] in f):
-            del f[names[1]]
-        f.create_dataset(names[1], data=yd, shape=yd.shape, dtype=np.uint16, compression='gzip')
-        f.close()
+            if (names[1] in f):
+                del f[names[1]]
+            f.create_dataset(names[1], data=yd, shape=yd.shape, dtype=np.uint16, compression='gzip')
 
 
     # Set up plot

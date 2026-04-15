@@ -21,14 +21,12 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
 
     # Input acceptor and donor stacks
     try:
-        f3 = h5py.File(work_out_path + '_ratio_back.h5', 'r')
-        ratio_frange = np.array(f3.attrs['ratio_frange'])
-        acceptor = np.array(f3['acceptor'])
-        donor = np.array(f3['donor'])
-
-        acceptori = dict(zip(ratio_frange, np.array(f3['acceptori'])))
-        donori = dict(zip(ratio_frange, np.array(f3['donori'])))
-        f3.close()
+        with h5py.File(work_out_path + '_ratio_back.h5', 'r') as f3:
+            ratio_frange = np.array(f3.attrs['ratio_frange'])
+            acceptor = np.array(f3['acceptor'])
+            donor = np.array(f3['donor'])
+            acceptori = dict(zip(ratio_frange, np.array(f3['acceptori'])))
+            donori = dict(zip(ratio_frange, np.array(f3['donori'])))
     except:
         raise ImportError(work_out_path + "_ratio_back.h5 not found")
 
@@ -133,25 +131,21 @@ def ratio(verbose,logger,work_out_path,crop,res,register,union,h5_save,tiff_save
 
     # Input background subtracted image stack
     try:
-        f = h5py.File(work_out_path + '_back.h5', 'r')
+        with h5py.File(work_out_path + '_back.h5', 'r') as f:
+            try:
+                acceptor = np.array(f['acceptor'])
+                acceptor_frange = np.array(f.attrs['acceptor_frange'])
+            except:
+                raise ImportError("Acceptor stack background not processed")
+            try:
+                donor = np.array(f['donor'])
+                donor_frange = np.array(f.attrs['donor_frange'])
+            except:
+                raise ImportError("Donor stack background not processed")
+    except ImportError:
+        raise
     except:
         raise ImportError(work_out_path + "_back.h5 not found")
-
-    # Input acceptor stack
-    try:
-        acceptor = np.array(f['acceptor'])
-        acceptor_frange = np.array(f.attrs['acceptor_frange'])
-    except:
-        raise ImportError("Acceptor stack background not processed")
-
-    # Input donor stack
-    try:
-        donor = np.array(f['donor'])
-        donor_frange = np.array(f.attrs['donor_frange'])
-    except:
-        raise ImportError("Donor stack background not processed")
-
-    f.close()
 
     # Find frame dimensions and intersection between processed frames and input frames
     Ydim, Xdim = acceptor.shape[1:]
@@ -180,12 +174,10 @@ def ratio(verbose,logger,work_out_path,crop,res,register,union,h5_save,tiff_save
     # Search for saved ratio images
     try:
         # Input files into dictionaries
-        f2 = h5py.File(work_out_path + '_ratio_back.h5', 'r')
-        ratio_frange = np.array(f2.attrs['ratio_frange'])
-
-        acceptori = dict(list(zip(ratio_frange, np.array(f2['acceptori']))))
-        donori = dict(list(zip(ratio_frange, np.array(f2['donori']))))
-        f2.close()
+        with h5py.File(work_out_path + '_ratio_back.h5', 'r') as f2:
+            ratio_frange = np.array(f2.attrs['ratio_frange'])
+            acceptori = dict(list(zip(ratio_frange, np.array(f2['acceptori']))))
+            donori = dict(list(zip(ratio_frange, np.array(f2['donori']))))
     except:
         # Initialize empty dictionaries for intensities
         acceptori, donori = {},{}

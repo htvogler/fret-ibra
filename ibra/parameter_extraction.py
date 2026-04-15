@@ -17,8 +17,8 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
     current_path = os.getcwd()
 
     # Check for optional donor filename — if absent or empty, run in single-channel mode
-    donor_fname_raw = config['File Parameters'].get('donor_filename', '').encode("utf-8").decode().strip()
-    single_channel = (donor_fname_raw == '')
+    second_channel_raw = config['File Parameters'].get('second_channel', '').encode("utf-8").decode().strip()
+    single_channel = second_channel_raw.lower() in ('', '0', 'no', 'false', 'off')
 
     # Finalize input/output paths
     if inp_path[:2] == '..':
@@ -60,7 +60,7 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
 
     # Single-channel mode: warn if a two-channel module was selected
     if single_channel and module in (1, 2, 3):
-        print("\nWarning: donor_filename is not set (single-channel mode) but option {} requires a donor channel.".format(module))
+        print("\nWarning: second_channel is not set or set to 0 (single-channel mode) but option {} requires a donor channel.".format(module))
         print("In single-channel mode only option 0 (background subtraction, acceptor) is valid.")
         answer = input("Continue with option 0 instead? [y/n]: ").strip().lower()
         if answer == 'y':
@@ -77,16 +77,26 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
     res = np.power(2, resolution) - 1
 
     # Input parallel option
-    parallel = config['File Parameters'].getboolean('parallel', fallback=False)
+    parallel_raw = config['File Parameters'].get('parallel', '').strip()
+    parallel = parallel_raw.lower() in ('1', 'yes', 'true', 'on')
 
     # Open log file
     logger = logit(work_out_path)
 
     # Log whether running in single-channel or two-channel mode
     if single_channel:
-        logger.info('Running in single-channel mode (no donor filename provided)')
+        logger.info('Running in single-channel mode (second_channel not set or 0)')
     else:
-        logger.info('Running in two-channel mode (donor: {})'.format(donor_fname_raw))
+        logger.info('Running in two-channel mode (second_channel = {})'.format(second_channel_raw))
+
+    # Module 3 runs the full pipeline from scratch — remove stale HDF5 output files
+    # so they don't cause file-lock errors on re-runs
+    if module == 3 and h5_save:
+        for stale in (work_out_path + '_back.h5', work_out_path + '_ratio_back.h5'):
+            if os.path.exists(stale):
+                os.remove(stale)
+                print("Warning: removed stale output file: {}".format(stale))
+                logger.info('Removed stale output file: {}'.format(stale))
 
     # Background module options
     if (module <= 1 or module == 3):
@@ -121,8 +131,10 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
         crop = list(map(int, crop))
 
         # Input options for image registration and the union between donor and accepter channels
-        register = config['Ratio Parameters'].getboolean('register')
-        union = config['Ratio Parameters'].getboolean('union')
+        register_raw = config['Ratio Parameters'].get('register', '').strip()
+        register = register_raw.lower() in ('1', 'yes', 'true', 'on') if register_raw else True
+        union_raw = config['Ratio Parameters'].get('union', '').strip()
+        union = union_raw.lower() in ('1', 'yes', 'true', 'on') if union_raw else True
 
         # Run the ratio image processing algorithm
         rp.ratio(verbose, logger, work_out_path, crop, res, register, union, h5_save, tiff_save, frange)

@@ -32,8 +32,13 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
     if not os.path.exists(work_inp_path):
         raise IOError("Input path does not exist")
 
+    # Create FRET-IBRA_results folder in the input directory if it doesn't exist
+    results_root = work_inp_path + '/FRET-IBRA_results'
+    if not os.path.exists(results_root):
+        os.makedirs(results_root)
+
     work_inp_path += '/' + fname
-    work_out_path = current_path + '/' + fname + '/'
+    work_out_path = results_root + '/' + fname + '/'
     if not os.path.exists(work_out_path):
         os.makedirs(work_out_path)
     work_out_path += fname

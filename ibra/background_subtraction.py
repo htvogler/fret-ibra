@@ -282,6 +282,28 @@ def background(verbose,logger,work_inp_path,work_out_path,ext,res,module,eps,win
     if (h5_save):
         h5_time_start = timer()
         h5(all.im_framef,val,work_out_path + '_back.h5',frange=frange)
+
+        # Compute and save per-frame foreground masked median intensity for bleach correction
+        # Uses Otsu threshold to define foreground, matching how acceptori is computed in ratio processing
+        import cv2
+        res_local = stack.res
+        mult = np.float32(255) / np.float32(res_local)
+        ires = 100 / np.float32(res_local)
+        channeli = []
+        for i in range(all.im_framef.shape[0]):
+            frame_scaled = np.uint8(np.float32(all.im_framef[i, :, :]) * mult)
+            if np.amax(frame_scaled) > 3:
+                _, thresh = cv2.threshold(frame_scaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            else:
+                _, thresh = cv2.threshold(frame_scaled, 3, 255, cv2.THRESH_BINARY)
+            from scipy import ndimage as ndi
+            if np.amax(all.im_framef[i, :, :]) > 0:
+                channeli.append(ndi.median(all.im_framef[i, :, :], labels=thresh / 255) * ires)
+            else:
+                channeli.append(0.0)
+        channeli = np.array(channeli, dtype=np.float16)
+        h5(channeli, val + 'i', work_out_path + '_back.h5', frange=frange)
+
         h5_time_end = timer()
 
         if (verbose):

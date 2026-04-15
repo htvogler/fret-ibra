@@ -94,14 +94,23 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
     else:
         logger.info('Running in two-channel mode (second_channel = {})'.format(second_channel_raw))
 
-    # Module 3 runs the full pipeline from scratch — remove stale HDF5 output files
-    # so they don't cause file-lock errors on re-runs
+    # Module 3 runs the full pipeline from scratch — warn if existing HDF5 output files
+    # are present, since they may contain carefully tuned per-frame results
     if module == 3 and h5_save:
-        for stale in (work_out_path + '_back.h5', work_out_path + '_ratio_back.h5'):
-            if os.path.exists(stale):
-                os.remove(stale)
-                print("Warning: removed stale output file: {}".format(stale))
-                logger.info('Removed stale output file: {}'.format(stale))
+        existing = [f for f in (work_out_path + '_back.h5', work_out_path + '_ratio_back.h5')
+                    if os.path.exists(f)]
+        if existing:
+            print("\nWarning: the following output files already exist and will be overwritten by module 3:")
+            for f in existing:
+                print("  {}".format(f))
+            print("If you have tuned individual frames using modules 0 or 1, those results will be lost.")
+            answer = input("Continue and overwrite? [y/n]: ").strip().lower()
+            if answer == 'y':
+                for f in existing:
+                    os.remove(f)
+                    logger.info('Removed existing output file for fresh run: {}'.format(f))
+            else:
+                raise SystemExit("Aborted. Run modules 0, 1, 2 and 4 sequentially to preserve per-frame tuning.")
 
     # Background module options
     if (module <= 1 or module == 3):
@@ -147,30 +156,35 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
     # Bleach correction module
     if (module == 4):
         # Input the bleaching range for the acceptor channel
-        acceptor_bound = config['Bleach Parameters'].get('acceptor_bleach_range').split(':')
-        acceptor_bound = list(map(int, acceptor_bound))
-
+        acceptor_bleach_raw = config['Bleach Parameters'].get('acceptor_bleach_range', '').strip()
+        if not acceptor_bleach_raw or ':' not in acceptor_bleach_raw:
+            raise ValueError("acceptor_bleach_range must be set as a colon-separated range (e.g. 1:100) for bleach correction")
+        acceptor_bound = list(map(int, acceptor_bleach_raw.split(':')))
         assert (acceptor_bound[1] >= acceptor_bound[
             0]), "acceptor_bleach_range last frame should be >= acceptor_bleach_range first frame"
+        assert (acceptor_bound[1] <= len(frange)), "acceptor_bleach_range end frame exceeds number of processed frames"
 
         # In single-channel mode, donor bleach correction is not applicable;
         # passing [0, 0] causes rp.bleach() to skip the donor correction silently
         if single_channel:
             donor_bound = [0, 0]
         else:
-            donor_bound = config['Bleach Parameters'].get('donor_bleach_range').split(':')
-            donor_bound = list(map(int, donor_bound))
+            donor_bleach_raw = config['Bleach Parameters'].get('donor_bleach_range', '').strip()
+            if not donor_bleach_raw or ':' not in donor_bleach_raw:
+                raise ValueError("donor_bleach_range must be set as a colon-separated range (e.g. 1:100) for bleach correction")
+            donor_bound = list(map(int, donor_bleach_raw.split(':')))
             assert (donor_bound[1] >= donor_bound[
                 0]), "donor_bleach_range last frame should be >= donor_bleach_range first frame"
+            assert (donor_bound[1] <= len(frange)), "donor_bleach_range end frame exceeds number of processed frames"
 
         # Input bleach correction for fitting and correcting image median intensity
-        fitter = config['Bleach Parameters'].get('fit')
+        fitter = config['Bleach Parameters'].get('fit', '').strip()
         fits = ['linear', 'exponential', 'loess']
-
-        assert (fitter in fits), "fit should be either linear, exponential or loess"
+        if fitter not in fits:
+            raise ValueError("fit must be set to one of: linear, exponential, loess")
 
         # Run bleach correction algorithm
-        rp.bleach(verbose, logger, work_out_path, acceptor_bound, donor_bound, fitter, h5_save, tiff_save, frange)
+        rp.bleach(verbose, logger, work_out_path, acceptor_bound, donor_bound, fitter, h5_save, tiff_save, frange, single_channel=single_channel)
 
     # Output message
     print ("Processing is complete")

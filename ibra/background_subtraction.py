@@ -391,10 +391,10 @@ def background(verbose, logger, work_inp_path, work_out_path, ext, res, module, 
             acceptornz_dict = dict(zip(frange, channelnz.astype(float)))
             time_evolution(acceptori_dict, acceptori_dict,
                            work_out_path, '_intensity_nonbleach.png',
-                           'Median Intensity/Bit Depth', h5_save=False)
+                           'Median Intensity/Bit Depth', h5_save=False, single_channel=True)
             time_evolution(acceptornz_dict, acceptornz_dict,
                            work_out_path, '_pixelcount.png',
-                           'Foreground/Total Image Pixels', h5_save=False)
+                           'Foreground/Total Image Pixels', h5_save=False, single_channel=True)
             if verbose:
                 print("Saving quality assessment PNGs for single-channel mode")
 

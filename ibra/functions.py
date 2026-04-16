@@ -272,15 +272,15 @@ def h5(data, val, path, frange):
             f.create_dataset(val, data=res, shape=res.shape, dtype=np.float16, compression='gzip')
 
 
-def time_evolution(acceptor, donor, work_out_path, name, ylabel, h5_save):
-    """Median channel intensity per frame"""
+def time_evolution(acceptor, donor, work_out_path, name, ylabel, h5_save, single_channel=False):
+    """Median channel intensity per frame.
+
+    In single_channel mode, plots a single blue line with no legend.
+    In two-channel mode, plots acceptor (purple) and donor (orange) with legend.
+    """
     acceptor_plot = sorted(acceptor.items())
     xa, ya = list(zip(*acceptor_plot))
     xplot = [x + 1 for x in xa]
-
-    # Sort frames for plotting
-    donor_plot = sorted(donor.items())
-    _, yd = list(zip(*donor_plot))
 
     vals = ['acceptori','donori','acceptornz','donornz']
     if (ylabel == 'Median Intensity/Bit Depth'):
@@ -290,27 +290,34 @@ def time_evolution(acceptor, donor, work_out_path, name, ylabel, h5_save):
         names = vals[2:]
         dec = 2
 
-    if (h5_save):
-        # Convert to arrays
-        ya = np.array(ya)
-        yd = np.array(yd)
+    if h5_save and not single_channel:
+        # Only save to HDF5 in two-channel mode — single-channel has no _ratio_back.h5
+        donor_plot = sorted(donor.items())
+        _, yd = list(zip(*donor_plot))
+        ya_arr = np.array(ya)
+        yd_arr = np.array(yd)
 
-        # Open HDF5 dataset
         with h5py.File(work_out_path+'_ratio_back.h5', 'a') as f:
-
-            # Save dictionary data in HDF5 dataset
             if (names[0] in f):
                 del f[names[0]]
-            f.create_dataset(names[0], data=ya, shape=ya.shape, dtype=np.uint16, compression='gzip')
+            f.create_dataset(names[0], data=ya_arr, shape=ya_arr.shape, dtype=np.uint16, compression='gzip')
 
             if (names[1] in f):
                 del f[names[1]]
-            f.create_dataset(names[1], data=yd, shape=yd.shape, dtype=np.uint16, compression='gzip')
+            f.create_dataset(names[1], data=yd_arr, shape=yd_arr.shape, dtype=np.uint16, compression='gzip')
 
     # Set up plot
     fig, ax = plt.subplots(figsize=(12, 8))
-    ax.plot(xplot, ya, c=(0.62745098, 0.152941176, 0.498039216), marker='*')
-    ax.plot(xplot, yd, c=(1, 0.517647059, 0), marker='*')
+
+    if single_channel:
+        # Single line in acceptor blue, no legend
+        ax.plot(xplot, ya, c=(0.62745098, 0.152941176, 0.498039216), marker='*')
+    else:
+        donor_plot = sorted(donor.items())
+        _, yd = list(zip(*donor_plot))
+        ax.plot(xplot, ya, c=(0.62745098, 0.152941176, 0.498039216), marker='*')
+        ax.plot(xplot, yd, c=(1, 0.517647059, 0), marker='*')
+        plt.legend(['Acceptor', 'Donor'], fancybox=None, fontsize=18)
 
     plt.ylabel(ylabel, labelpad=15, fontsize=22)
     ax.yaxis.set_major_formatter(PercentFormatter(decimals=dec))
@@ -320,8 +327,8 @@ def time_evolution(acceptor, donor, work_out_path, name, ylabel, h5_save):
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     plt.xticks(fontsize=18)
 
-    plt.legend(['Acceptor','Donor'], fancybox=None, fontsize=18)
     plt.savefig(work_out_path + name, bbox_inches='tight')
+    plt.close(fig)
 
 
 def block(data, size):

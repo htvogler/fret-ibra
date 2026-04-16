@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from scipy import ndimage
 
 # Bleach correction module
-def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_save,tiff_save,frange,single_channel=False):
+def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_save,tiff_save,frange,single_channel=False,crop=None):
     # Start time
     time_start = timer()
 
@@ -115,7 +115,18 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
                     + ', time: ' + time_elapsed + ' sec, save: ' + str(h5_save))
 
     # Create plot to show median intensity over frame number after bleaching
-    time_evolution(acceptori,donori,work_out_path,'_intensity_bleach.png','Median Intensity/Bit Depth',h5_save=False)
+    time_evolution(acceptori,donori,work_out_path,'_intensity_bleach.png','Median Intensity/Bit Depth',h5_save=False,single_channel=single_channel)
+
+    # Apply spatial crop to corrected stacks before saving if crop parameters provided.
+    # crop = [x0, y0, x1, y1]; [0,0,0,0] or None means no crop.
+    if crop is not None and crop != [0, 0, 0, 0]:
+        Ydim, Xdim = acceptor.shape[1:]
+        x0, y0 = crop[0], crop[1]
+        x1 = crop[2] if crop[2] != 0 else Xdim
+        y1 = crop[3] if crop[3] != 0 else Ydim
+        acceptor = acceptor[:, y0:y1, x0:x1]
+        if not single_channel and donor is not None:
+            donor = donor[:, y0:y1, x0:x1]
 
     # Save bleach corrected output
     if (h5_save or tiff_save):

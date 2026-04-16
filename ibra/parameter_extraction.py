@@ -191,9 +191,20 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
 
         assert (fitter in fits), "fit should be either linear, exponential or loess"
 
+        # Read crop parameters — applied to the corrected output stack before saving.
+        # [0,0,0,0] means no crop. Parsed here so bleach() is self-contained.
+        crop_raw = config['Ratio Parameters'].get('crop', '').strip()
+        if crop_raw:
+            try:
+                crop = list(map(int, crop_raw.split(',')))
+            except ValueError:
+                crop = [0, 0, 0, 0]
+        else:
+            crop = [0, 0, 0, 0]
+
         # Run bleach correction algorithm
         rp.bleach(verbose, logger, work_out_path, acceptor_bound, donor_bound, fitter, h5_save, tiff_save, frange,
-                  single_channel=single_channel)
+                  single_channel=single_channel, crop=crop)
 
     # Output message
     print("Processing is complete")

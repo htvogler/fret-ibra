@@ -5,6 +5,7 @@ FRET-IBRA is used to create fully processed ratiometric images from input donor 
 """
 
 import os, sys, getopt
+import multiprocessing
 import parameter_extraction
 
 __version__='0.4.0'
@@ -74,4 +75,8 @@ def main():
         gui.main_gui()
 
 if __name__ == "__main__":
+    # Set spawn start method once at program entry — ensures cross-platform
+    # compatibility for ProcessPoolExecutor (avoids fork deadlocks with
+    # OpenCV/pims on Linux, and matches macOS/Windows default behaviour).
+    multiprocessing.set_start_method('spawn')
     main()

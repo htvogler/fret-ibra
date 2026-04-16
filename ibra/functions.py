@@ -238,13 +238,11 @@ def h5(data, val, path, frange):
             # Partial writes (individual frames or sub-ranges) still go through
             # the merge path so per-frame tuning is preserved.
             if np.array_equal(np.sort(frange), np.sort(orange)):
-                print(f"h5 {val}: FAST PATH — incoming={len(frange)} frames dtype={np.array(frange).dtype}, stored={len(orange)} frames dtype={orange.dtype}")
                 del f[val]
                 res = np.array(data)
                 res_range = frange
             else:
                 # Partial update — merge new frames into existing dataset
-                print(f"h5 {val}: MERGE PATH — incoming={len(frange)} frames dtype={np.array(frange).dtype}, stored={len(orange)} frames dtype={orange.dtype}")
                 orig = f[val]
                 orig_dict = dict(zip(orange, orig))
                 new_dict = dict(zip(frange, data))

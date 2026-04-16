@@ -212,6 +212,7 @@ def main_gui():
     par_state.set(0)
     par_check = tk.Checkbutton(frm6,variable=par_state)
     par_check.grid(sticky="W",row=5,column=2,padx=2)
+    tk.Label(frm6, text='(only effective for stacks > 30 frames)', fg='grey', font=40).grid(sticky="W",row=5,column=3)
 
     frm_line2 = tk.Frame(root,padx=5,pady=1)
     frm_line2.pack(side="top", fill="x", expand=True)

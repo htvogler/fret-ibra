@@ -114,7 +114,13 @@ class stack():
 
     # Run background subtraction stack workflow
     def stack_workflow(self, parallel):
-        if parallel:
+        # Only use parallel processing if explicitly enabled AND frame count
+        # exceeds the threshold. Below the threshold, process spawn overhead
+        # (bootstrapping worker processes) exceeds the parallelisation benefit.
+        PARALLEL_FRAME_THRESHOLD = 30
+        use_parallel = parallel and len(self.frange) > PARALLEL_FRAME_THRESHOLD
+
+        if use_parallel:
             # Ensure spawn start method is used for cross-platform compatibility.
             # spawn is the default on Windows and macOS (Python 3.8+) and is safe
             # everywhere. fork (Linux default) can cause deadlocks with certain

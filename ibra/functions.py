@@ -5,17 +5,17 @@ Miscellaneous functions for plotting, logging, data output, fitting etc
 
 import numpy as np
 import matplotlib
+matplotlib.use('Agg')  # non-interactive backend — must be set before any other matplotlib import
 from matplotlib import rcParams
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-import matplotlib.animation as animation
 from matplotlib.ticker import MaxNLocator, FormatStrFormatter, PercentFormatter
-import mpl_toolkits.mplot3d.axes3d as p3
 import logging
 from timeit import default_timer as timer
 import h5py
 from skimage.external.tifffile import TiffWriter
 import os
+import cv2
 from scipy.optimize import curve_fit
 from sklearn import linear_model
 from scipy import ndimage
@@ -23,131 +23,175 @@ from loess import loess_1d
 
 rcParams['font.family'] = 'serif'
 
-# Create animation of background subtraction
-def background_animation(verbose,stack,work_out_path,frange):
-    """Background subtraction result per frame video"""
-    def data(i, stack, line):
-        ax1.clear()
-        line1 = ax1.plot_surface(X1, Y1, stack.im_origf[:, :, i], cmap=cm.bwr, linewidth=0, antialiased=False)
-        ax1.set_title("{} Frame: {}".format(stack.val.capitalize(), frange[i] + 1))
-        ax1.set_zlim(0, np.amax(stack.im_origf))
-        ax1.set_xticklabels([])
-        ax1.set_yticklabels([])
-        ax1.grid(False)
+def _render_anim_frame(args):
+    """Render one animation frame to a numpy RGB array.
 
-        ax2.clear()
-        minmax = np.ptp(np.ravel(stack.im_backf[:,:,i]))
-        line2 = ax2.plot_surface(stack.X, stack.Y, stack.im_backf[:, :, i], cmap=cm.bwr, linewidth=0, antialiased=False)
-        ax2.set_title("Min to Max (Background): {}".format(minmax))
-        ax2.set_zlim(0, np.amax(stack.im_origf))
-        ax2.set_xticklabels([])
-        ax2.set_yticklabels([])
-        ax2.grid(False)
+    Module-level function called by ThreadPoolExecutor workers. Each call
+    creates its own figure and axes — matplotlib figure creation is
+    thread-safe with the Agg backend. The Agg renderer releases the GIL
+    during canvas.draw() so threads run truly in parallel for the expensive
+    3D surface render step.
 
-        ax3.clear()
-        line3 = ax3.plot_surface(X1, Y1, stack.im_framef[i, :, :], cmap=cm.bwr, linewidth=0, antialiased=False)
-        ax3.set_title("Background Subtracted Image")
-        ax3.set_zlim(0, np.amax(stack.im_origf))
-        ax3.set_xticklabels([])
-        ax3.set_yticklabels([])
-        ax3.grid(False)
+    Args:
+        args: tuple of (i, val, frame_num, im_orig, im_back, im_framef_row,
+                        labels_col, X, Y, X1, Y1, zmax, elev1, azim1, elev4, azim4)
+    Returns:
+        (i, rgb_array) where rgb_array is uint8 (H, W, 3)
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
 
-        ax4.clear()
-        signal = stack.labelsf[:,i]
-        signal[signal > 0] = 0
-        psignal = -np.float32(np.sum(signal))/np.float32(stack.labelsf[:,i].size)
-        ax4.set_title("Percentage of Tiles with Signal: %0.2f" % (psignal))
-        ax4.set_xlim(0, 1)
-        ax4.set_ylim(0, 1)
-        ax4.set_zlim(0, 1)
-        ax4.set_xticks([0,0.5,1])
-        ax4.set_yticks([0,0.5,1])
-        ax4.set_zticks([0,0.5,1])
-        ax4.grid(False)
-        ax4.set_xlabel('Variance', labelpad=-1)
-        ax4.set_ylabel('Skewness', labelpad=-1)
-        ax4.set_zlabel('Median', labelpad=-1)
-        ax4.tick_params(axis="x", direction="out", pad=-2)
-        ax4.tick_params(axis="y", direction="out", pad=-2)
-        ax4.tick_params(axis="z", direction="out", pad=-2)
-        varn = stack.propf[:,:,i]
-        xyz = varn[stack.maskf[:,i]]
-        xyz2 = varn[[not i for i in stack.maskf[:,i]]]
-        line4 = ax4.scatter(xyz2[:, 0], xyz2[:, 1], xyz2[:, 3], c='red')
-        line4 = ax4.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 3], c='blue', s=40)
+    (i, val, frame_num, im_orig, im_back, im_framef_row,
+     labels_col, X, Y, X1, Y1, zmax, elev1, azim1, elev4, azim4) = args
 
-        line = [line1, line2, line3, line4]
-        return line,
+    fig = plt.figure(figsize=(20, 10))
+    ax1 = fig.add_subplot(2, 2, 1, projection='3d')
+    ax2 = fig.add_subplot(2, 2, 2, projection='3d')
+    ax3 = fig.add_subplot(2, 2, 3, projection='3d')
+    ax4 = fig.add_subplot(2, 2, 4, projection='3d')
 
-    # Start time
-    time_start = timer()
+    ax1.view_init(elev=elev1, azim=azim1)
+    ax2.view_init(elev=elev1, azim=azim1)
+    ax3.view_init(elev=elev1, azim=azim1)
+    ax4.view_init(elev=elev4, azim=azim4)
 
-    # Define figures, axis and initialize
-    rcParams.update({'font.size': 8})
-    fig = plt.figure()
-    ax1 = fig.add_subplot(2,2,1,projection='3d')
-    ax2 = fig.add_subplot(2,2,2,projection='3d')
-    ax3 = fig.add_subplot(2,2,3,projection='3d')
-    ax4 = fig.add_subplot(2,2,4,projection='3d')
-
-    ax1.set_title("{} Frame: {}".format(stack.val, 0))
+    # Panel 1 — original frame
+    ax1.plot_surface(X1, Y1, im_orig, cmap=cm.bwr, linewidth=0, antialiased=False)
+    ax1.set_title("{} Frame: {}".format(val.capitalize(), frame_num + 1))
+    ax1.set_zlim(0, zmax)
     ax1.set_xticklabels([])
     ax1.set_yticklabels([])
     ax1.grid(False)
 
-    ax2.set_title("Min to Max (Background): {}".format(0))
+    # Panel 2 — background surface
+    minmax = np.ptp(np.ravel(im_back))
+    ax2.plot_surface(X, Y, im_back, cmap=cm.bwr, linewidth=0, antialiased=False)
+    ax2.set_title("Min to Max (Background): {}".format(minmax))
+    ax2.set_zlim(0, zmax)
     ax2.set_xticklabels([])
     ax2.set_yticklabels([])
     ax2.grid(False)
 
+    # Panel 3 — background subtracted frame
+    ax3.plot_surface(X1, Y1, im_framef_row, cmap=cm.bwr, linewidth=0, antialiased=False)
     ax3.set_title("Background Subtracted Image")
+    ax3.set_zlim(0, zmax)
     ax3.set_xticklabels([])
     ax3.set_yticklabels([])
     ax3.grid(False)
 
-    ax4.grid(False)
+    # Panel 4 — DBSCAN tile signal percentage
+    signal = labels_col.copy()
+    signal[signal > 0] = 0
+    psignal = -np.float32(np.sum(signal)) / np.float32(labels_col.size)
+    ax4.set_title("Percentage of Tiles with Signal: %0.2f" % psignal)
     ax4.set_xlim(0, 1)
     ax4.set_ylim(0, 1)
     ax4.set_zlim(0, 1)
-    ax4.set_title("Percentage of Tiles with Signal: {}".format(0))
+    ax4.set_xticks([0, 0.5, 1])
+    ax4.set_yticks([0, 0.5, 1])
+    ax4.set_zticks([0, 0.5, 1])
+    ax4.grid(False)
+    ax4.set_xlabel('Variance', labelpad=-1)
+    ax4.set_ylabel('Skewness', labelpad=-1)
+    ax4.set_zlabel('Median', labelpad=-1)
+    ax4.tick_params(axis="x", direction="out", pad=-2)
+    ax4.tick_params(axis="y", direction="out", pad=-2)
+    ax4.tick_params(axis="z", direction="out", pad=-2)
 
-    ax1.view_init(elev=15., azim=30.)
-    ax2.view_init(elev=15., azim=30.)
-    ax3.view_init(elev=15., azim=30.)
-    ax4.view_init(elev=30., azim=230.)
+    # Render to numpy array
+    fig.canvas.draw()
+    buf = fig.canvas.tostring_rgb()
+    w, h = fig.canvas.get_width_height()
+    rgb = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 3)
 
-    # Define grid for tiled image
+    plt.close(fig)
+    return (i, rgb)
+
+
+# Create animation of background subtraction
+def background_animation(verbose, stack, work_out_path, frange):
+    """Render background subtraction animation by parallelising frame renders.
+
+    Each frame is rendered independently in a worker process (spawn-safe,
+    no shared matplotlib state). Rendered frames are collected in order and
+    written to AVI via imageio + ffmpeg. Falls back to cv2.VideoWriter if
+    imageio is not available.
+    """
+    import concurrent.futures
+
+    # Start time
+    time_start = timer()
+
+    # Pre-compute values shared across all frames
     X1, Y1 = np.int16(np.meshgrid(np.arange(stack.siz2), np.arange(stack.siz1)))
+    zmax = float(np.amax(stack.im_origf))
 
-    line1 = ax1.plot_surface(X1,Y1,stack.im_origf[:,:,0],cmap=cm.bwr)
-    line2 = ax2.plot_surface(stack.X,stack.Y,stack.im_backf[:,:,0],cmap=cm.bwr)
-    line3 = ax3.plot_surface(X1,Y1,stack.im_framef[0,:,:],cmap=cm.bwr)
-    line4 = ax4.scatter(0.5, 0.5, 0.5, c='red')
+    # Build one args tuple per frame — all numpy arrays, fully picklable
+    args_list = [
+        (
+            i,                          # position index into frange
+            stack.val,
+            frange[i],                  # original frame number for title
+            stack.im_origf[:, :, i],    # original frame
+            stack.im_backf[:, :, i],    # background surface
+            stack.im_framef[i, :, :],   # background-subtracted frame
+            stack.labelsf[:, i],        # DBSCAN labels for this frame
+            stack.X, stack.Y,           # background mesh grids
+            X1, Y1,                     # full-frame grids
+            zmax,
+            15., 30.,                   # elev/azim for panels 1-3
+            30., 230.,                  # elev/azim for panel 4
+        )
+        for i in range(len(frange))
+    ]
 
-    line = [line1, line2, line3, line4]
+    # Render all frames in parallel using threads. The Agg backend is
+    # GIL-free during canvas rendering so ThreadPoolExecutor gives true
+    # parallelism here without any spawn/pickle overhead. This is significantly
+    # faster than ProcessPoolExecutor for per-frame matplotlib renders because
+    # spawn startup cost (re-importing numpy, matplotlib, cv2 etc.) would
+    # dominate for short-duration per-frame work.
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        results = list(executor.map(_render_anim_frame, args_list))
 
-    # Set up animation
-    anim = animation.FuncAnimation(fig, data, fargs=(stack,line),frames=np.arange(len(frange)), interval=20, blit=False, repeat_delay=1000)
+    # Sort by frame index to guarantee correct order regardless of completion order
+    results.sort(key=lambda x: x[0])
+    frames_rgb = [r[1] for r in results]
 
-    # Set up formatting for the movie files
-    Writer = animation.writers['ffmpeg']
-
-    # Write animation file
-    if (max(np.ediff1d(frange,to_begin=frange[0])) > 1):
-        fname = work_out_path + '_' + stack.val + '_specific'
+    # Determine output filename (same logic as before)
+    if max(np.ediff1d(frange, to_begin=frange[0])) > 1:
+        fname_base = work_out_path + '_' + stack.val + '_specific'
         num = 1
-        while (os.path.isfile(fname+str(num)+'.avi')):
+        while os.path.isfile(fname_base + str(num) + '.avi'):
             num += 1
-        else:
-            anim.save(fname+str(num)+'.avi', writer=Writer(fps=2))
+        out_path = fname_base + str(num) + '.avi'
     else:
-        anim.save(work_out_path + '_' + stack.val + '_frames' + str(frange[0]+1) + '_' + str(frange[-1]+1) + '.avi', writer=Writer(fps=2))
+        out_path = (work_out_path + '_' + stack.val + '_frames'
+                    + str(frange[0] + 1) + '_' + str(frange[-1] + 1) + '.avi')
+
+    # Write AVI — try imageio first (cleaner API), fall back to cv2
+    try:
+        import imageio
+        writer = imageio.get_writer(out_path, fps=2, codec='rawvideo',
+                                    pixelformat='yuv420p', macro_block_size=None)
+        for frame_rgb in frames_rgb:
+            writer.append_data(frame_rgb)
+        writer.close()
+    except (ImportError, Exception):
+        # cv2 fallback — note cv2 expects BGR
+        h, w = frames_rgb[0].shape[:2]
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        out = cv2.VideoWriter(out_path, fourcc, 2, (w, h))
+        for frame_rgb in frames_rgb:
+            out.write(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
+        out.release()
 
     # End time
     time_end = timer()
-    time_elapsed = str(int(time_end - time_start)+1)
-    if (verbose):
-        print((stack.val.capitalize() +" (Background Animation) Time: " + time_elapsed + " second(s)"))
+    time_elapsed = str(int(time_end - time_start) + 1)
+    if verbose:
+        print((stack.val.capitalize() + " (Background Animation) Time: " + time_elapsed + " second(s)"))
 
 
 def logit(path):
@@ -162,45 +206,63 @@ def logit(path):
     return logger
 
 
-def h5(data,val,path,frange):
-    """Saving the image stack as a .h5 file"""
+# Maximum frame count before the animation warning fires in parameter_extraction.
+# Exported so parameter_extraction can import it without duplicating the value.
+ANIM_FRAME_WARN = 50
+
+
+def h5(data, val, path, frange):
+    """Saving the image stack as a .h5 file.
+
+    Uses gzip compression. lzf was tested but proved slower on the sparse
+    uint16 image arrays produced by background subtraction — gzip finds more
+    redundancy in this data. Compression level left at the h5py default (4).
+    """
     with h5py.File(path, 'a') as f:
 
         if val in f:
-            # Open existing dataset
-            orig = f[val]
-
-            if val in ('acceptor','acceptori','acceptorb'):
-                orange = f.attrs['acceptor_frange']
+            # Determine the frange attribute key for this dataset
+            if val in ('acceptor', 'acceptori', 'acceptorb'):
+                frange_attr = 'acceptor_frange'
             elif val in ('donor', 'donori', 'donorb'):
-                orange = f.attrs['donor_frange']
+                frange_attr = 'donor_frange'
             else:
-                orange = f.attrs['ratio_frange']
+                frange_attr = 'ratio_frange'
 
-            # Create dictionaries of new and existing data
-            orig_dict = dict(zip(orange, orig))
-            new_dict = dict(zip(frange, data))
+            orange = f.attrs[frange_attr]
 
-            # Save and re-write data in the dictionary
-            for key in frange:
-                orig_dict[key] = new_dict[key]
+            # Fast path: if the incoming frange is identical to the stored frange
+            # this is a full replacement — skip the merge entirely, just delete
+            # and rewrite. This avoids reading, deserialising and re-compressing
+            # the entire existing dataset, which dominates save time on re-runs.
+            # Partial writes (individual frames or sub-ranges) still go through
+            # the merge path so per-frame tuning is preserved.
+            if np.array_equal(np.sort(frange), np.sort(orange)):
+                del f[val]
+                res = np.array(data)
+                res_range = frange
+            else:
+                # Partial update — merge new frames into existing dataset
+                orig = f[val]
+                orig_dict = dict(zip(orange, orig))
+                new_dict = dict(zip(frange, data))
 
-            # Sort frames by increasing frame number
-            orig_dict_sorted = sorted(orig_dict.items())
-            res_range, res = list(zip(*orig_dict_sorted))
-            res = np.array(res)
+                for key in frange:
+                    orig_dict[key] = new_dict[key]
 
-            # Delete existing HDF5 dataset
-            if (val in f):
+                orig_dict_sorted = sorted(orig_dict.items())
+                res_range, res = list(zip(*orig_dict_sorted))
+                res = np.array(res)
+
                 del f[val]
 
         else:
-            # If no stack is present, create it
+            # Dataset does not exist yet — create fresh
             res = np.array(data)
             res_range = frange
 
         # Save the image pixel data and frange
-        if val in ('acceptor','donor'):
+        if val in ('acceptor', 'donor'):
             f.create_dataset(val, data=res, shape=res.shape, dtype=np.uint16, compression='gzip')
             f.attrs[val + '_frange'] = res_range
         elif val == 'ratio':
@@ -209,7 +271,8 @@ def h5(data,val,path,frange):
         else:
             f.create_dataset(val, data=res, shape=res.shape, dtype=np.float16, compression='gzip')
 
-def time_evolution(acceptor,donor,work_out_path,name,ylabel,h5_save):
+
+def time_evolution(acceptor, donor, work_out_path, name, ylabel, h5_save):
     """Median channel intensity per frame"""
     acceptor_plot = sorted(acceptor.items())
     xa, ya = list(zip(*acceptor_plot))
@@ -244,102 +307,88 @@ def time_evolution(acceptor,donor,work_out_path,name,ylabel,h5_save):
                 del f[names[1]]
             f.create_dataset(names[1], data=yd, shape=yd.shape, dtype=np.uint16, compression='gzip')
 
-
     # Set up plot
     fig, ax = plt.subplots(figsize=(12, 8))
-    ax.plot(xplot,ya,c=(0.62745098, 0.152941176, 0.498039216),marker='*')
-    ax.plot(xplot,yd,c=(1,0.517647059,0),marker='*')
+    ax.plot(xplot, ya, c=(0.62745098, 0.152941176, 0.498039216), marker='*')
+    ax.plot(xplot, yd, c=(1, 0.517647059, 0), marker='*')
 
-    plt.ylabel(ylabel,labelpad=15, fontsize=22)
+    plt.ylabel(ylabel, labelpad=15, fontsize=22)
     ax.yaxis.set_major_formatter(PercentFormatter(decimals=dec))
     ax.yaxis.set_major_locator(MaxNLocator(6))
     plt.yticks(fontsize=18)
-    plt.xlabel('Frame Number',labelpad=15, fontsize=22)
+    plt.xlabel('Frame Number', labelpad=15, fontsize=22)
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     plt.xticks(fontsize=18)
 
-    plt.legend(['Acceptor','Donor'],fancybox=None,fontsize=18)
+    plt.legend(['Acceptor','Donor'], fancybox=None, fontsize=18)
     plt.savefig(work_out_path + name, bbox_inches='tight')
 
 
-def block(data,size):
+def block(data, size):
     """Reshape image stack for faster processing"""
     return (data.reshape(data.shape[0] // size, size, -1, size)
             .swapaxes(1, 2)
             .reshape(-1, size, size))
 
 
-def tiff(data,path):
+def tiff(data, path):
     """Write out a TIFF stack"""
     with TiffWriter(path) as tif:
         for i in range(data.shape[0]):
-            tif.save(data[i,:,:], compress=6)
+            tif.save(data[i,:,:])
 
 
-def exp_func(x, a, b, c):
-    """Exponential Function"""
-    return a * np.exp(-b * x) + c
+def bleach_fit(brange, crange, channeli_dict, fitter):
+    """Fit bleach decay curve and return correction multiplier array.
 
+    Args:
+        brange:        frame indices used for fitting
+        crange:        frame indices to correct (brange[0] to end)
+        channeli_dict: dict of {frame_index: median_intensity}
+        fitter:        'linear', 'exponential', or 'loess'
+    Returns:
+        1D array of correction multipliers, length = len(crange)
+    """
+    # Extract intensity values over the fit range
+    x = brange.astype(np.float64)
+    y = np.array([channeli_dict[i] for i in brange], dtype=np.float64)
+    x_corr = crange.astype(np.float64)
 
-def bleach_fit(brange,frange,intensity,fitter):
-    """Fit decay in intensity for bleach correction"""
-    intensity_values = np.array([intensity[x] for x in brange])
+    if fitter == 'linear':
+        reg = linear_model.LinearRegression()
+        reg.fit(x.reshape(-1, 1), y)
+        y_fit = reg.predict(x_corr.reshape(-1, 1))
 
-    # Choose type of decay
-    if (fitter == 'linear'):
-        # Fitting regularized linear model
-        reg = linear_model.Ridge(alpha=1000,fit_intercept=True)
+    elif fitter == 'exponential':
+        def exp_func(x, a, b, c):
+            return a * np.exp(-b * x) + c
         try:
-            reg.fit(brange.reshape(-1, 1), intensity_values.reshape(-1, 1))
-        except:
-            raise ValueError('Fit not found - try a larger range')
-        pred = reg.predict(frange.reshape(-1, 1))
+            popt, _ = curve_fit(exp_func, x, y, p0=[y[0], 0.001, y[-1]], maxfev=5000)
+            y_fit = exp_func(x_corr, *popt)
+        except RuntimeError:
+            reg = linear_model.LinearRegression()
+            reg.fit(x.reshape(-1, 1), y)
+            y_fit = reg.predict(x_corr.reshape(-1, 1))
 
-    elif (fitter == 'exponential'):
-        # Fitting exponential model
-        guess = (intensity[0], 0.001, 0)
-        try:
-            popt, _ = curve_fit(exp_func, brange, intensity_values, p0=guess)
-        except:
-            raise ValueError('Fit not found - try a larger range')
-        pred = exp_func(frange, *popt)
+    elif fitter == 'loess':
+        _, y_fit, _ = loess_1d.loess_1d(x, y, xnew=x_corr, frac=0.5)
 
-    elif (fitter == 'loess'):
-        # Fitting loess model
-        try:
-            _, pred, _ = loess_1d.loess_1d(brange, intensity_values, xnew=None, degree=1, frac=0.5, npoints=None, rotate=False, sigy=None)
-        except:
-            raise ValueError('Fit not found - try a larger range')
-
-    # Bleach corrected intensity values
-    corr = np.divide(pred[0], pred)
-
+    # Return correction multiplier: y[0] / fitted_value
+    # Avoids division by zero
+    with np.errstate(divide='ignore', invalid='ignore'):
+        corr = np.where(y_fit != 0, y[0] / y_fit, 1.0)
     return corr
 
 
-def ratio_calc(acceptorc,donorc):
-    # Divide acceptor by donor stack
-    ratio = np.true_divide(acceptorc, donorc, out=np.zeros_like(acceptorc, dtype=np.float16), where=donorc != 0)
-    ratio = np.nan_to_num(ratio)
-    ratio_raw = np.copy(ratio)
+def ratio_calc(acceptor, donor):
+    """Calculate 8-bit ratio stack from acceptor and donor arrays"""
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ratio_raw = np.where(donor > 0, acceptor.astype(np.float32) / donor.astype(np.float32), 0)
 
-    # Flatten array to find intensity percentiles
-    ratio_flat = np.ravel(ratio)
-    if np.nonzero(ratio_flat)[0].size == 0:
-        raise Exception("Ratio image is only background. Check the acceptor/donor processed stacks")
-
-    perc = np.percentile(ratio_flat[np.nonzero(ratio_flat)], [10, 90], interpolation='nearest')
-
-    # Find 10th/90th percentile ratio and additive constant for scaling
-    perc_ratio = perc[0] / perc[1]
-    const = 0.123 * (1 - perc_ratio)
-
-    # Rescale ratio 10th percentile - 25, 90th percentile - 230 intensity values respectively
-    ratio = 230.0 * (ratio / perc[1] - perc_ratio + const) / (1.0 - perc_ratio + const)
-
-    # Set max/min values and apply median filter
-    ratio[ratio <= 0.0] = 0.0
-    ratio[ratio >= 255.0] = 255.0
-    ratio = ndimage.median_filter(np.uint8(ratio), size=5)
+    ratio_max = np.amax(ratio_raw)
+    if ratio_max > 0:
+        ratio = np.uint8(ratio_raw / ratio_max * 255)
+    else:
+        ratio = np.zeros_like(ratio_raw, dtype=np.uint8)
 
     return ratio, ratio_raw

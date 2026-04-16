@@ -19,7 +19,6 @@ from timeit import default_timer as timer
 from skimage.external.tifffile import TiffWriter
 import concurrent.futures
 import multiprocessing
-from itertools import repeat
 
 # #############################################################################
 
@@ -117,7 +116,7 @@ class stack():
         # Only use parallel processing if explicitly enabled AND frame count
         # exceeds the threshold. Below the threshold, process spawn overhead
         # (bootstrapping worker processes) exceeds the parallelisation benefit.
-        PARALLEL_FRAME_THRESHOLD = 30
+        PARALLEL_FRAME_THRESHOLD = 60
         use_parallel = parallel and len(self.frange) > PARALLEL_FRAME_THRESHOLD
 
         if use_parallel:
@@ -290,15 +289,15 @@ class frame():
 def _compute_channeli(im_frame, res_local):
     """Compute Otsu-masked median intensity and foreground pixel fraction for a single frame.
 
-    Module-level function so it is picklable under spawn. Called either
-    directly (serial path) or via ProcessPoolExecutor.map (parallel path).
+    Uses np.median on the masked foreground pixels directly — equivalent to
+    scipy.ndimage.median with a binary label mask but orders of magnitude faster
+    since it avoids the label-region iteration overhead.
 
     Returns:
         (channeli, nz) — masked median intensity as % of bit depth, and
                          foreground pixel count as % of total pixels.
     """
     import cv2
-    from scipy import ndimage as ndi
     mult = np.float32(255) / np.float32(res_local)
     ires = 100 / np.float32(res_local)
     ipix = 100 / float(im_frame.size)
@@ -308,10 +307,8 @@ def _compute_channeli(im_frame, res_local):
     else:
         _, thresh = cv2.threshold(frame_scaled, 3, 255, cv2.THRESH_BINARY)
     nz = np.count_nonzero(thresh) * ipix
-    if np.amax(im_frame) > 0:
-        channeli = float(ndi.median(im_frame, labels=thresh / 255) * ires)
-    else:
-        channeli = 0.0
+    foreground = im_frame[thresh > 0]
+    channeli = float(np.median(foreground) * ires) if len(foreground) > 0 else 0.0
     return (channeli, nz)
 
 
@@ -371,13 +368,9 @@ def background(verbose, logger, work_inp_path, work_out_path, ext, res, module, 
         res_local = all.res
         frames_list = [all.im_framef[i, :, :] for i in range(all.im_framef.shape[0])]
 
-        if parallel:
-            with concurrent.futures.ProcessPoolExecutor() as executor:
-                channeli_results = list(executor.map(
-                    _compute_channeli, frames_list, repeat(res_local)
-                ))
-        else:
-            channeli_results = [_compute_channeli(f, res_local) for f in frames_list]
+        # channeli computation is fast (numpy median on boolean-indexed array)
+        # so spawn overhead from ProcessPoolExecutor would dominate — always serial
+        channeli_results = [_compute_channeli(f, res_local) for f in frames_list]
 
         channeli = np.array([r[0] for r in channeli_results], dtype=np.float16)
         channelnz = np.array([r[1] for r in channeli_results], dtype=np.float32)

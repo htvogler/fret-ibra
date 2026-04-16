@@ -1,6 +1,6 @@
 import os
 import configparser
-from functions import logit
+from functions import logit, ANIM_FRAME_WARN
 import background_subtraction as bs
 import ratiometric_processing as rp
 import numpy as np
@@ -70,7 +70,6 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
         answer = input("Continue with option 0 instead? [y/n]: ").strip().lower()
         if answer == 'y':
             module = 0
-            logger.info('Single-channel mode: option overridden from {} to 0'.format(int(config['Modules'].get('option'))))
         else:
             raise SystemExit("Aborted. Please set option = 0 in your config file for single-channel mode.")
 
@@ -93,6 +92,21 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
         logger.info('Running in single-channel mode (second_channel not set or 0)')
     else:
         logger.info('Running in two-channel mode (second_channel = {})'.format(second_channel_raw))
+
+    # Animation frame count warning — fires before any processing begins so the
+    # user is not left waiting for a prompt after a long background subtraction run.
+    # Only shown when -a or -e was passed (anim_save=True) and the frame range
+    # exceeds the threshold. Fires once regardless of how many channels module 3
+    # will process.
+    if anim_save and (module <= 1 or module == 3) and len(frange) > ANIM_FRAME_WARN:
+        print(("\nWarning: animation requested for {} frames. "
+               "3D surface rendering is slow — this may take a very long time.\n"
+               "For eps tuning, run a short frame range (10-20 frames) instead.\n"
+               "Continue anyway? [y/n]: ").format(len(frange)), end='')
+        answer = input().strip().lower()
+        if answer != 'y':
+            anim_save = False
+            print("Background animation disabled for this run.")
 
     # Module 3 runs the full pipeline from scratch — warn if existing HDF5 output files
     # are present, since they may contain carefully tuned per-frame results
@@ -158,33 +172,39 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
         # Input the bleaching range for the acceptor channel
         acceptor_bleach_raw = config['Bleach Parameters'].get('acceptor_bleach_range', '').strip()
         if not acceptor_bleach_raw or ':' not in acceptor_bleach_raw:
-            raise ValueError("acceptor_bleach_range must be set as a colon-separated range (e.g. 1:100) for bleach correction")
+            raise ValueError("acceptor_bleach_range must be set as a colon-separated range (e.g. 1:100)")
         acceptor_bound = list(map(int, acceptor_bleach_raw.split(':')))
-        assert (acceptor_bound[1] >= acceptor_bound[
-            0]), "acceptor_bleach_range last frame should be >= acceptor_bleach_range first frame"
-        assert (acceptor_bound[1] <= len(frange)), "acceptor_bleach_range end frame exceeds number of processed frames"
 
-        # In single-channel mode, donor bleach correction is not applicable;
-        # passing [0, 0] causes rp.bleach() to skip the donor correction silently
-        if single_channel:
-            donor_bound = [0, 0]
-        else:
-            donor_bleach_raw = config['Bleach Parameters'].get('donor_bleach_range', '').strip()
+        # Input the bleaching range for the donor channel (ignored in single-channel mode)
+        donor_bleach_raw = config['Bleach Parameters'].get('donor_bleach_range', '').strip()
+        if not single_channel:
             if not donor_bleach_raw or ':' not in donor_bleach_raw:
-                raise ValueError("donor_bleach_range must be set as a colon-separated range (e.g. 1:100) for bleach correction")
-            donor_bound = list(map(int, donor_bleach_raw.split(':')))
-            assert (donor_bound[1] >= donor_bound[
-                0]), "donor_bleach_range last frame should be >= donor_bleach_range first frame"
-            assert (donor_bound[1] <= len(frange)), "donor_bleach_range end frame exceeds number of processed frames"
+                raise ValueError("donor_bleach_range must be set as a colon-separated range (e.g. 1:100)")
+        donor_bound = list(map(int, donor_bleach_raw.split(':'))) if donor_bleach_raw and ':' in donor_bleach_raw else acceptor_bound
+
+        assert (acceptor_bound[1] >= acceptor_bound[0]), "acceptor_bleach_range last frame should be >= acceptor_bleach_range first frame"
+        assert (donor_bound[1] >= donor_bound[0]), "donor_bleach_range last frame should be >= donor_bleach_range first frame"
 
         # Input bleach correction for fitting and correcting image median intensity
-        fitter = config['Bleach Parameters'].get('fit', '').strip()
+        fitter = config['Bleach Parameters'].get('fit')
         fits = ['linear', 'exponential', 'loess']
-        if fitter not in fits:
-            raise ValueError("fit must be set to one of: linear, exponential, loess")
+
+        assert (fitter in fits), "fit should be either linear, exponential or loess"
+
+        # Read crop parameters — applied to the corrected output stack before saving.
+        # [0,0,0,0] means no crop. Parsed here so bleach() is self-contained.
+        crop_raw = config['Ratio Parameters'].get('crop', '').strip()
+        if crop_raw:
+            try:
+                crop = list(map(int, crop_raw.split(',')))
+            except ValueError:
+                crop = [0, 0, 0, 0]
+        else:
+            crop = [0, 0, 0, 0]
 
         # Run bleach correction algorithm
-        rp.bleach(verbose, logger, work_out_path, acceptor_bound, donor_bound, fitter, h5_save, tiff_save, frange, single_channel=single_channel)
+        rp.bleach(verbose, logger, work_out_path, acceptor_bound, donor_bound, fitter, h5_save, tiff_save, frange,
+                  single_channel=single_channel, crop=crop)
 
     # Output message
-    print ("Processing is complete")
+    print("Processing is complete")

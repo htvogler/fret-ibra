@@ -6,7 +6,6 @@ FRET-IBRA is used to create fully processed ratiometric images from input donor 
 
 import os, sys, getopt
 import parameter_extraction
-import gui
 
 __version__='0.4.0'
 
@@ -16,7 +15,7 @@ def usage():
     print(("Version: {}".format(__version__)))
     print((""))
     print(("Config Usage:  ./ibra.py -c <config file> [Options]"))
-    print(("GUI Usage:  ./ibra.py -g")) 
+    print(("GUI Usage:  ./ibra.py -g"))
     print((""))
     print(("Options: -t   Output TIFF stack"))
     print(("         -v   Print progress output (verbose)"))
@@ -69,6 +68,9 @@ def main():
         parameter_extraction.main_extract(cfname,tiff_save,verbose,h5_save,anim_save)
 
     elif "-g" in sys.argv[1:]:
+        # Lazy import — keeps tkinter out of worker processes spawned by
+        # ProcessPoolExecutor, which have no display and would fail on import
+        import gui
         gui.main_gui()
 
 if __name__ == "__main__":

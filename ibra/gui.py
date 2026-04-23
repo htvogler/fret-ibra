@@ -284,6 +284,10 @@ def main_gui():
     frm_head5.pack(side="top",fill="x",expand=True)
     tk.Label(frm_head5,text='Bleach Processing Parameters', fg='slate grey', font=40).grid(sticky="W",row=5,column=1)
 
+    frm_head5b = tk.Frame(root,padx=5,pady=1)
+    frm_head5b.pack(side="top",fill="x",expand=True)
+    tk.Label(frm_head5b,text='Recommended before TIGRMUM analysis — uncorrected signal drift can cause inconsistent frame-to-frame segmentation.', fg='grey', font=40).grid(sticky="W",row=5,column=1)
+
     frm12 = tk.Frame(root,padx=5,pady=1)
     frm12.pack(side="top",fill="x",expand=True)
     ttk.Label(frm12,text='Acceptor Bleach Range'.ljust(21), font=40).grid(sticky="W",row=5,column=1)

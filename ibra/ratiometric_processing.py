@@ -352,9 +352,10 @@ def ratio(verbose,logger,work_out_path,crop,res,register,union,h5_save,tiff_save
         logger.info('(Ratio Processing) ' + 'frames: ' + str(print_range[0]) + '-' + str(print_range[-1]) + ', time: ' + time_elapsed + ' sec, save: ' + str(h5_save))
 
 
-    # Create plot to showcase median intensity over frame number and the number of foreground pixels per channel (NON-bleach corrected)
-    time_evolution(acceptori,donori,work_out_path,'_intensity_nonbleach.png','Median Intensity/Bit Depth',h5_save)
-    time_evolution(acceptornz,donornz,work_out_path,'_pixelcount.png','Foreground/Total Image Pixels',h5_save)
+    # Quality plots after ratio processing — intensities reflect post-crop/registration/union data.
+    # Named distinctly from the bg-subtraction PNGs produced by modules 0/1.
+    time_evolution(acceptori,donori,work_out_path,'_intensity_nonbleach_ratio.png','Median Intensity/Bit Depth',h5_save)
+    time_evolution(acceptornz,donornz,work_out_path,'_pixelcount_ratio.png','Foreground/Total Image Pixels',h5_save)
 
     # Calculate 8-bit ratio image with NON-bleach corrected donor and acceptor channels
     if (h5_save or tiff_save):

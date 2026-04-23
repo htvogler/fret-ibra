@@ -361,41 +361,35 @@ def background(verbose, logger, work_inp_path, work_out_path, ext, res, module, 
         h5(all.im_framef, val, work_out_path + '_back.h5', frange=frange)
 
     # Compute per-frame foreground masked median intensity and pixel count.
-    # Always computed in single-channel mode (needed for quality PNGs regardless
-    # of h5_save). In two-channel mode only computed when h5_save is True since
-    # the two-channel quality plots are produced by ratiometric_processing instead.
-    if single_channel or h5_save:
-        res_local = all.res
-        frames_list = [all.im_framef[i, :, :] for i in range(all.im_framef.shape[0])]
+    # Always computed — needed for quality PNGs and (when h5_save) for HDF5 output.
+    res_local = all.res
+    frames_list = [all.im_framef[i, :, :] for i in range(all.im_framef.shape[0])]
 
-        # channeli computation is fast (numpy median on boolean-indexed array)
-        # so spawn overhead from ProcessPoolExecutor would dominate — always serial
-        channeli_results = [_compute_channeli(f, res_local) for f in frames_list]
+    # channeli computation is fast (numpy median on boolean-indexed array)
+    # so spawn overhead from ProcessPoolExecutor would dominate — always serial
+    channeli_results = [_compute_channeli(f, res_local) for f in frames_list]
 
-        channeli = np.array([r[0] for r in channeli_results], dtype=np.float16)
-        channelnz = np.array([r[1] for r in channeli_results], dtype=np.float32)
+    channeli = np.array([r[0] for r in channeli_results], dtype=np.float16)
+    channelnz = np.array([r[1] for r in channeli_results], dtype=np.float32)
 
-        if h5_save:
-            h5(channeli, val + 'i', work_out_path + '_back.h5', frange=frange)
+    if h5_save:
+        h5(channeli, val + 'i', work_out_path + '_back.h5', frange=frange)
 
-        # Quality assessment PNGs — single-channel only.
-        # Two-channel quality plots are produced by ratiometric_processing.ratio()
-        # after module 2, where both channels are available together.
-        # In single-channel mode module 2 is skipped so we produce them here instead.
-        # acceptori and acceptornz are passed for both arguments — the plot shows
-        # a single line labelled 'Acceptor'; the 'Donor' line overlaps it exactly
-        # and is visually indistinguishable, which is acceptable for a diagnostic plot.
-        if single_channel:
-            acceptori_dict = dict(zip(frange, channeli.astype(float)))
-            acceptornz_dict = dict(zip(frange, channelnz.astype(float)))
-            time_evolution(acceptori_dict, acceptori_dict,
-                           work_out_path, '_intensity_nonbleach.png',
-                           'Median Intensity/Bit Depth', h5_save=False, single_channel=True)
-            time_evolution(acceptornz_dict, acceptornz_dict,
-                           work_out_path, '_pixelcount.png',
-                           'Foreground/Total Image Pixels', h5_save=False, single_channel=True)
-            if verbose:
-                print("Saving quality assessment PNGs for single-channel mode")
+    # Quality assessment PNGs — produced after every module 0 or 1 run.
+    # Show per-frame bg-subtracted intensity and foreground pixel count.
+    # Useful for identifying freak frames and estimating bleach curves
+    # before running module 4. In two-channel mode each module run produces
+    # its own per-channel PNG (acceptor_ or donor_ prefixed).
+    channeli_dict = dict(zip(frange, channeli.astype(float)))
+    channelnz_dict = dict(zip(frange, channelnz.astype(float)))
+    time_evolution(channeli_dict, channeli_dict,
+                   work_out_path, '_' + val + '_intensity_nonbleach.png',
+                   'Median Intensity/Bit Depth', h5_save=False, single_channel=True)
+    time_evolution(channelnz_dict, channelnz_dict,
+                   work_out_path, '_' + val + '_pixelcount.png',
+                   'Foreground/Total Image Pixels', h5_save=False, single_channel=True)
+    if verbose:
+        print("Saving quality assessment PNGs for " + val + " channel")
 
     if h5_save:
         h5_time_end = timer()

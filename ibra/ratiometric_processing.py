@@ -33,16 +33,36 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
         donori = acceptori  # placeholder — not used in single-channel mode
         donor = None
     else:
-        # Two-channel mode: read both channels from _ratio_back.h5
-        try:
-            with h5py.File(work_out_path + '_ratio_back.h5', 'r') as f3:
-                ratio_frange = np.array(f3.attrs['ratio_frange'])
-                acceptor = np.array(f3['acceptor'])
-                donor = np.array(f3['donor'])
-                acceptori = dict(zip(ratio_frange, np.array(f3['acceptori'])))
-                donori = dict(zip(ratio_frange, np.array(f3['donori'])))
-        except:
-            raise ImportError(work_out_path + "_ratio_back.h5 not found")
+        # Two-channel mode: prefer _ratio_back.h5 (0+1+2+4 path); fall back to _back.h5 (0+1+4 path)
+        import os as _os
+        _ratio_h5 = work_out_path + '_ratio_back.h5'
+        _back_h5  = work_out_path + '_back.h5'
+        if _os.path.exists(_ratio_h5):
+            _two_ch_source = 'ratio'
+            try:
+                with h5py.File(_ratio_h5, 'r') as f3:
+                    ratio_frange = np.array(f3.attrs['ratio_frange'])
+                    acceptor  = np.array(f3['acceptor'])
+                    donor     = np.array(f3['donor'])
+                    acceptori = dict(zip(ratio_frange, np.array(f3['acceptori'])))
+                    donori    = dict(zip(ratio_frange, np.array(f3['donori'])))
+            except:
+                raise ImportError(work_out_path + "_ratio_back.h5 could not be read")
+        elif _os.path.exists(_back_h5):
+            _two_ch_source = 'back'
+            try:
+                with h5py.File(_back_h5, 'r') as f3:
+                    ratio_frange = np.array(f3.attrs['acceptor_frange'])
+                    acceptor  = np.array(f3['acceptor'])
+                    donor     = np.array(f3['donor'])
+                    acceptori = dict(zip(ratio_frange, np.array(f3['acceptori'])))
+                    donori    = dict(zip(ratio_frange, np.array(f3['donori'])))
+            except KeyError as e:
+                raise ImportError("_back.h5 missing expected dataset: {} — re-run modules 0 and 1".format(e))
+            except:
+                raise ImportError(work_out_path + "_back.h5 could not be read")
+        else:
+            raise ImportError("Neither _ratio_back.h5 nor _back.h5 found — run modules 0+1 before bleach correction")
 
     # Fit and correct acceptor channel intensity
     nframes = acceptor.shape[0]
@@ -69,7 +89,10 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
 
         # Save acceptor bleaching factors
         if (h5_save):
-            h5_path = work_out_path + ('_back.h5' if single_channel else '_ratio_back.h5')
+            if single_channel:
+                h5_path = work_out_path + '_back.h5'
+            else:
+                h5_path = work_out_path + ('_back.h5' if _two_ch_source == 'back' else '_ratio_back.h5')
             h5(acceptorb,'acceptorb',h5_path,ratio_frange)
 
     # Fit and correct donor channel intensity (two-channel mode only)
@@ -96,7 +119,8 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
 
         # Save donor bleaching factors
         if (h5_save):
-            h5(donorb,'donorb',work_out_path+'_ratio_back.h5',ratio_frange)
+            _donorb_path = work_out_path + ('_back.h5' if _two_ch_source == 'back' else '_ratio_back.h5')
+            h5(donorb,'donorb',_donorb_path,ratio_frange)
 
     # End time
     time_end = timer()
@@ -135,6 +159,8 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
             if (h5_save):
                 h5_time_start = timer()
                 h5(acceptor,'acceptor',work_out_path+'_back.h5',frange)
+                with h5py.File(work_out_path+'_back.h5','a') as _f:
+                    _f.attrs['bleach_corrected'] = True
                 h5_time_end = timer()
                 if (verbose):
                     print("Saving bleach corrected Acceptor stack in " + work_out_path+'_back.h5' + ' [Time: ' + str(int(h5_time_end - h5_time_start) + 1) + " second(s)]")
@@ -145,14 +171,27 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
                 if (verbose):
                     print("Saving bleach corrected Acceptor TIFF in " + work_out_path + '_acceptor_back_bleach.tif' + ' [Time: ' + str(int(tiff_time_end - tiff_time_start)+1) + " second(s)]")
         else:
-            # Two-channel: save bleach corrected individual channel stacks and ratio
+            # Two-channel: save bleach corrected channel stacks.
+            # 0+1+2+4 path (_ratio_back.h5 was source): write to _ratio_back.h5 and set attribute there.
+            # 0+1+4 path (_back.h5 was source): write to _back.h5 only.
             if (h5_save):
                 h5_time_start = timer()
-                h5(acceptor,'acceptor',work_out_path+'_ratio_back.h5',frange)
-                h5(donor,'donor',work_out_path+'_ratio_back.h5',frange)
-                h5_time_end = timer()
-                if (verbose):
-                    print("Saving bleach corrected Acceptor and Donor stacks in " + work_out_path+'_ratio_back.h5' + ' [Time: ' + str(int(h5_time_end - h5_time_start) + 1) + " second(s)]")
+                if _two_ch_source == 'ratio':
+                    h5(acceptor,'acceptor',work_out_path+'_ratio_back.h5',frange)
+                    h5(donor,'donor',work_out_path+'_ratio_back.h5',frange)
+                    with h5py.File(work_out_path+'_ratio_back.h5','a') as _f:
+                        _f.attrs['bleach_corrected'] = True
+                    h5_time_end = timer()
+                    if (verbose):
+                        print("Saving bleach corrected Acceptor and Donor stacks in " + work_out_path+'_ratio_back.h5' + ' [Time: ' + str(int(h5_time_end - h5_time_start) + 1) + " second(s)]")
+                else:
+                    h5(acceptor,'acceptor',work_out_path+'_back.h5',frange)
+                    h5(donor,'donor',work_out_path+'_back.h5',frange)
+                    h5_time_end = timer()
+                    if (verbose):
+                        print("Saving bleach corrected Acceptor and Donor stacks in " + work_out_path+'_back.h5' + ' [Time: ' + str(int(h5_time_end - h5_time_start) + 1) + " second(s)]")
+                with h5py.File(work_out_path+'_back.h5','a') as _f:
+                    _f.attrs['bleach_corrected'] = True
             if (tiff_save):
                 tiff_time_start = timer()
                 tiff(acceptor, work_out_path + '_acceptor_back_bleach.tif')
@@ -161,21 +200,22 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
                 if (verbose):
                     print("Saving bleach corrected Acceptor TIFF in " + work_out_path + '_acceptor_back_bleach.tif' + ' [Time: ' + str(int(tiff_time_end - tiff_time_start)+1) + " second(s)]")
                     print("Saving bleach corrected Donor TIFF in " + work_out_path + '_donor_back_bleach.tif')
-            # Recalculate and save ratio from bleach corrected channels
-            ratio, ratio_raw = ratio_calc(acceptor,donor)
-            if (h5_save):
-                h5_time_start = timer()
-                h5(ratio,'ratio',work_out_path+'_ratio_back.h5',frange)
-                h5(ratio_raw,'ratio_raw',work_out_path+'_ratio_back.h5',frange)
-                h5_time_end = timer()
-                if (verbose):
-                    print("Saving bleach corrected Ratio stack in " + work_out_path+'_ratio_back.h5' + ' [Time: ' + str(int(h5_time_end - h5_time_start) + 1) + " second(s)]")
-            if (tiff_save):
-                tiff_time_start = timer()
-                tiff(ratio, work_out_path + '_ratio_back_bleach.tif')
-                tiff_time_end = timer()
-                if (verbose):
-                    print("Saving bleach corrected Ratio TIFF in " + work_out_path + '_ratio_back_bleach.tif' + ' [Time: ' + str(int(tiff_time_end - tiff_time_start)+1) + " second(s)]")
+            # Recalculate and save ratio from bleach corrected channels (only when _ratio_back.h5 exists)
+            if _two_ch_source == 'ratio':
+                ratio, ratio_raw = ratio_calc(acceptor,donor)
+                if (h5_save):
+                    h5_time_start = timer()
+                    h5(ratio,'ratio',work_out_path+'_ratio_back.h5',frange)
+                    h5(ratio_raw,'ratio_raw',work_out_path+'_ratio_back.h5',frange)
+                    h5_time_end = timer()
+                    if (verbose):
+                        print("Saving bleach corrected Ratio stack in " + work_out_path+'_ratio_back.h5' + ' [Time: ' + str(int(h5_time_end - h5_time_start) + 1) + " second(s)]")
+                if (tiff_save):
+                    tiff_time_start = timer()
+                    tiff(ratio, work_out_path + '_ratio_back_bleach.tif')
+                    tiff_time_end = timer()
+                    if (verbose):
+                        print("Saving bleach corrected Ratio TIFF in " + work_out_path + '_ratio_back_bleach.tif' + ' [Time: ' + str(int(tiff_time_end - tiff_time_start)+1) + " second(s)]")
 
 
 def ratio(verbose,logger,work_out_path,crop,res,register,union,h5_save,tiff_save,frange):

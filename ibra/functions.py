@@ -34,7 +34,7 @@ def _render_anim_frame(args):
 
     Args:
         args: tuple of (i, val, frame_num, im_orig, im_back, im_framef_row,
-                        labels_col, X, Y, X1, Y1, zmax, elev1, azim1, elev4, azim4)
+                        labels_col, propf_col, mask_col, X, Y, X1, Y1, zmax, elev1, azim1, elev4, azim4)
     Returns:
         (i, rgb_array) where rgb_array is uint8 (H, W, 3)
     """
@@ -42,7 +42,7 @@ def _render_anim_frame(args):
     import matplotlib.cm as cm
 
     (i, val, frame_num, im_orig, im_back, im_framef_row,
-     labels_col, X, Y, X1, Y1, zmax, elev1, azim1, elev4, azim4) = args
+     labels_col, propf_col, mask_col, X, Y, X1, Y1, zmax, elev1, azim1, elev4, azim4) = args
 
     fig = plt.figure(figsize=(20, 10))
     ax1 = fig.add_subplot(2, 2, 1, projection='3d')
@@ -81,6 +81,7 @@ def _render_anim_frame(args):
     ax3.grid(False)
 
     # Panel 4 — DBSCAN tile signal percentage
+    ax4.clear()
     signal = labels_col.copy()
     signal[signal > 0] = 0
     psignal = -np.float32(np.sum(signal)) / np.float32(labels_col.size)
@@ -98,6 +99,10 @@ def _render_anim_frame(args):
     ax4.tick_params(axis="x", direction="out", pad=-2)
     ax4.tick_params(axis="y", direction="out", pad=-2)
     ax4.tick_params(axis="z", direction="out", pad=-2)
+    xyz = propf_col[mask_col]
+    xyz2 = propf_col[~mask_col]
+    ax4.scatter(xyz2[:, 0], xyz2[:, 1], xyz2[:, 3], c='red')
+    ax4.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 3], c='blue', s=40)
 
     # Render to numpy array
     fig.canvas.draw()
@@ -137,6 +142,8 @@ def background_animation(verbose, stack, work_out_path, frange):
             stack.im_backf[:, :, i],    # background surface
             stack.im_framef[i, :, :],   # background-subtracted frame
             stack.labelsf[:, i],        # DBSCAN labels for this frame
+            stack.propf[:, :, i],       # tile feature vectors (variance, skewness, kurtosis, median, centroid)
+            stack.maskf[:, i],          # core sample mask (True = core, False = non-core)
             stack.X, stack.Y,           # background mesh grids
             X1, Y1,                     # full-frame grids
             zmax,

@@ -347,7 +347,7 @@ def block(data, size):
 
 def tiff(data, path):
     """Write out a TIFF stack"""
-    with TiffWriter(path) as tif:
+    with TiffWriter(path, bigtiff=True) as tif:
         for i in range(data.shape[0]):
             tif.save(data[i,:,:])
 

@@ -26,12 +26,6 @@ rcParams['font.family'] = 'serif'
 def _render_anim_frame(args):
     """Render one animation frame to a numpy RGB array.
 
-    Module-level function called by ThreadPoolExecutor workers. Each call
-    creates its own figure and axes — matplotlib figure creation is
-    thread-safe with the Agg backend. The Agg renderer releases the GIL
-    during canvas.draw() so threads run truly in parallel for the expensive
-    3D surface render step.
-
     Args:
         args: tuple of (i, val, frame_num, im_orig, im_back, im_framef_row,
                         labels_col, propf_col, mask_col, X, Y, X1, Y1, zmax, elev1, azim1, elev4, azim4)
@@ -44,7 +38,7 @@ def _render_anim_frame(args):
     (i, val, frame_num, im_orig, im_back, im_framef_row,
      labels_col, propf_col, mask_col, X, Y, X1, Y1, zmax, elev1, azim1, elev4, azim4) = args
 
-    fig = plt.figure(figsize=(20, 10))
+    fig = plt.figure(figsize=(20, 10), dpi=72)
     ax1 = fig.add_subplot(2, 2, 1, projection='3d')
     ax2 = fig.add_subplot(2, 2, 2, projection='3d')
     ax3 = fig.add_subplot(2, 2, 3, projection='3d')
@@ -116,14 +110,7 @@ def _render_anim_frame(args):
 
 # Create animation of background subtraction
 def background_animation(verbose, stack, work_out_path, frange):
-    """Render background subtraction animation by parallelising frame renders.
-
-    Each frame is rendered independently in a worker process (spawn-safe,
-    no shared matplotlib state). Rendered frames are collected in order and
-    written to AVI via imageio + ffmpeg. Falls back to cv2.VideoWriter if
-    imageio is not available.
-    """
-    import concurrent.futures
+    """Render background subtraction animation and write MP4 (H.264) via imageio + ffmpeg."""
 
     # Start time
     time_start = timer()
@@ -132,67 +119,43 @@ def background_animation(verbose, stack, work_out_path, frange):
     X1, Y1 = np.int16(np.meshgrid(np.arange(stack.siz2), np.arange(stack.siz1)))
     zmax = float(np.amax(stack.im_origf))
 
-    # Build one args tuple per frame — all numpy arrays, fully picklable
-    args_list = [
-        (
-            i,                          # position index into frange
-            stack.val,
-            frange[i],                  # original frame number for title
-            stack.im_origf[:, :, i],    # original frame
-            stack.im_backf[:, :, i],    # background surface
-            stack.im_framef[i, :, :],   # background-subtracted frame
-            stack.labelsf[:, i],        # DBSCAN labels for this frame
-            stack.propf[:, :, i],       # tile feature vectors (variance, skewness, kurtosis, median, centroid)
-            stack.maskf[:, i],          # core sample mask (True = core, False = non-core)
-            stack.X, stack.Y,           # background mesh grids
-            X1, Y1,                     # full-frame grids
-            zmax,
-            15., 30.,                   # elev/azim for panels 1-3
-            30., 230.,                  # elev/azim for panel 4
+    # Render frames serially — matplotlib 3D rendering holds the GIL throughout,
+    # so ThreadPoolExecutor/ProcessPoolExecutor both run slower than serial.
+    frames_rgb = []
+    for i in range(len(frange)):
+        args = (
+            i, stack.val, frange[i],
+            stack.im_origf[:, :, i],
+            stack.im_backf[:, :, i],
+            stack.im_framef[i, :, :],
+            stack.labelsf[:, i],
+            stack.propf[:, :, i],
+            stack.maskf[:, i],
+            stack.X, stack.Y,
+            X1, Y1, zmax,
+            15., 30., 30., 230.,
         )
-        for i in range(len(frange))
-    ]
+        frames_rgb.append(_render_anim_frame(args)[1])
 
-    # Render all frames in parallel using threads. The Agg backend is
-    # GIL-free during canvas rendering so ThreadPoolExecutor gives true
-    # parallelism here without any spawn/pickle overhead. This is significantly
-    # faster than ProcessPoolExecutor for per-frame matplotlib renders because
-    # spawn startup cost (re-importing numpy, matplotlib, cv2 etc.) would
-    # dominate for short-duration per-frame work.
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        results = list(executor.map(_render_anim_frame, args_list))
-
-    # Sort by frame index to guarantee correct order regardless of completion order
-    results.sort(key=lambda x: x[0])
-    frames_rgb = [r[1] for r in results]
-
-    # Determine output filename (same logic as before)
+    # Determine output filename
     if max(np.ediff1d(frange, to_begin=frange[0])) > 1:
         fname_base = work_out_path + '_' + stack.val + '_specific'
         num = 1
-        while os.path.isfile(fname_base + str(num) + '.avi'):
+        while os.path.isfile(fname_base + str(num) + '.mp4'):
             num += 1
-        out_path = fname_base + str(num) + '.avi'
+        out_path = fname_base + str(num) + '.mp4'
     else:
         out_path = (work_out_path + '_' + stack.val + '_frames'
-                    + str(frange[0] + 1) + '_' + str(frange[-1] + 1) + '.avi')
+                    + str(frange[0] + 1) + '_' + str(frange[-1] + 1) + '.mp4')
 
-    # Write AVI — try imageio first (cleaner API), fall back to cv2
-    try:
-        import imageio
-        writer = imageio.get_writer(out_path, fps=2, codec='rawvideo',
-                                    pixelformat='yuv420p', macro_block_size=None)
-        for frame_rgb in frames_rgb:
-            writer.append_data(frame_rgb)
-        writer.close()
-    except (ImportError, Exception):
-        # cv2 fallback — note cv2 expects BGR
-        h, w = frames_rgb[0].shape[:2]
-        fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        out = cv2.VideoWriter(out_path, fourcc, 2, (w, h))
-        for frame_rgb in frames_rgb:
-            out.write(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
-        out.release()
+    # Write MP4 (H.264) via imageio + ffmpeg
+    import imageio
+    writer = imageio.get_writer(out_path, fps=2, codec='libx264',
+                                pixelformat='yuv420p', macro_block_size=None,
+                                output_params=['-crf', '23'])
+    for frame_rgb in frames_rgb:
+        writer.append_data(frame_rgb)
+    writer.close()
 
     # End time
     time_end = timer()

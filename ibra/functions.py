@@ -98,11 +98,11 @@ def _render_anim_frame(args):
     ax4.scatter(xyz2[:, 0], xyz2[:, 1], xyz2[:, 3], c='red')
     ax4.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 3], c='blue', s=40)
 
-    # Render to numpy array
+    # Render to numpy array (buffer_rgba replaces tostring_rgb removed in matplotlib 3.8)
     fig.canvas.draw()
-    buf = fig.canvas.tostring_rgb()
     w, h = fig.canvas.get_width_height()
-    rgb = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 3)
+    rgba = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)
+    rgb = rgba[:, :, :3]
 
     plt.close(fig)
     return (i, rgb)
@@ -397,7 +397,7 @@ def tiff(data, path):
     """Write out a TIFF stack"""
     with TiffWriter(path, bigtiff=True) as tif:
         for i in range(data.shape[0]):
-            tif.save(data[i,:,:])
+            tif.write(data[i,:,:])
 
 
 def bleach_fit(brange, crange, channeli_dict, fitter):

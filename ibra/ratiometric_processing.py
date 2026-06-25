@@ -149,7 +149,10 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
 
     # Apply spatial crop to corrected stacks before saving if crop parameters provided.
     # crop = [x0, y0, x1, y1]; [0,0,0,0] or None means no crop.
-    if crop is not None and crop != [0, 0, 0, 0]:
+    # Skip crop in two-channel mode when source is _ratio_back.h5: arrays are already
+    # cropped by module 2 (ratio), so applying original image coordinates again would
+    # produce a zero-size array.
+    if crop is not None and crop != [0, 0, 0, 0] and not (not single_channel and _two_ch_source == 'ratio'):
         Ydim, Xdim = acceptor.shape[1:]
         x0, y0 = crop[0], crop[1]
         x1 = crop[2] if crop[2] != 0 else Xdim

@@ -38,6 +38,14 @@ def _render_anim_frame(args):
     (i, val, frame_num, im_orig, im_back, im_framef_row,
      labels_col, propf_col, mask_col, X, Y, X1, Y1, zmax, elev1, azim1, elev4, azim4) = args
 
+    # Downsample pixel-resolution images (panels 1 & 3) to reduce vertex count.
+    # Step of 4 gives ~16x fewer vertices with no visible quality loss at 72 DPI.
+    _step = 4
+    im_orig_ds     = im_orig[::_step, ::_step]
+    im_framef_ds   = im_framef_row[::_step, ::_step]
+    _Hd, _Wd       = im_orig_ds.shape
+    X1d, Y1d       = np.int16(np.meshgrid(np.arange(_Wd), np.arange(_Hd)))
+
     fig = plt.figure(figsize=(20, 10), dpi=72)
     ax1 = fig.add_subplot(2, 2, 1, projection='3d')
     ax2 = fig.add_subplot(2, 2, 2, projection='3d')
@@ -50,15 +58,15 @@ def _render_anim_frame(args):
     ax4.view_init(elev=elev4, azim=azim4)
 
     # Panel 1 — original frame
-    ax1.plot_surface(X1, Y1, im_orig, cmap=cm.bwr, linewidth=0, antialiased=False)
+    ax1.plot_surface(X1d, Y1d, im_orig_ds, cmap=cm.bwr, linewidth=0, antialiased=False)
     ax1.set_title("{} Frame: {}".format(val.capitalize(), frame_num + 1))
     ax1.set_zlim(0, zmax)
     ax1.set_xticklabels([])
     ax1.set_yticklabels([])
     ax1.grid(False)
 
-    # Panel 2 — background surface
-    minmax = np.ptp(np.ravel(im_back))
+    # Panel 2 — background surface (already at tile resolution, no downsampling needed)
+    minmax = int(np.amax(im_back) - np.amin(im_back))
     ax2.plot_surface(X, Y, im_back, cmap=cm.bwr, linewidth=0, antialiased=False)
     ax2.set_title("Min to Max (Background): {}".format(minmax))
     ax2.set_zlim(0, zmax)
@@ -67,7 +75,7 @@ def _render_anim_frame(args):
     ax2.grid(False)
 
     # Panel 3 — background subtracted frame
-    ax3.plot_surface(X1, Y1, im_framef_row, cmap=cm.bwr, linewidth=0, antialiased=False)
+    ax3.plot_surface(X1d, Y1d, im_framef_ds, cmap=cm.bwr, linewidth=0, antialiased=False)
     ax3.set_title("Background Subtracted Image")
     ax3.set_zlim(0, zmax)
     ax3.set_xticklabels([])

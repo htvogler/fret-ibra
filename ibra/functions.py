@@ -13,7 +13,7 @@ from matplotlib.ticker import MaxNLocator, FormatStrFormatter, PercentFormatter
 import logging
 from timeit import default_timer as timer
 import h5py
-from skimage.external.tifffile import TiffWriter
+from tifffile import TiffWriter
 import os
 import cv2
 from scipy.optimize import curve_fit

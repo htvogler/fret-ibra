@@ -14,9 +14,10 @@ import cv2
 import math
 import pims
 import os
-from functions import background_animation, logit, h5, block, tiff, time_evolution
+import csv
+from functions import background_animation, logit, h5, block, tiff, time_evolution, detect_freak_frames
 from timeit import default_timer as timer
-from skimage.external.tifffile import TiffWriter
+from tifffile import TiffWriter
 import concurrent.futures
 import multiprocessing
 
@@ -390,6 +391,21 @@ def background(verbose, logger, work_inp_path, work_out_path, ext, res, module, 
                    'Foreground/Total Image Pixels', h5_save=False, single_channel=True)
     if verbose:
         print("Saving quality assessment PNGs for " + val + " channel")
+
+    # Freak frame detection — flag frames that deviate strongly from their
+    # local rolling median (MAD-based). Slow bleaching and natural oscillations
+    # are ignored; only sharp local spikes or dips are reported.
+    freak_frames = detect_freak_frames(channeli_dict)
+    if freak_frames:
+        csv_path = work_out_path + '_' + val + '_freak_frames.csv'
+        with open(csv_path, 'w', newline='') as csvf:
+            writer = csv.DictWriter(csvf, fieldnames=[
+                'frame_number', 'frame_index', 'value', 'local_median', 'deviation_mad'])
+            writer.writeheader()
+            writer.writerows(freak_frames)
+        if verbose:
+            print((val.capitalize() + " freak frames detected: " + str(len(freak_frames))
+                   + " — saved to " + csv_path))
 
     if h5_save:
         h5_time_end = timer()

@@ -9,6 +9,7 @@ matplotlib.use('Agg')  # non-interactive backend — must be set before any othe
 from matplotlib import rcParams
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+from PIL import Image, ImageDraw
 from matplotlib.ticker import MaxNLocator, FormatStrFormatter, PercentFormatter
 import logging
 from timeit import default_timer as timer
@@ -116,6 +117,44 @@ def _render_anim_frame(args):
     return (i, rgb)
 
 
+ANIM_3D_THRESHOLD = 100  # frames: <= this uses 3D surfaces, > this uses fast 2D colormaps
+
+
+def _render_anim_frame_2d(im_orig, im_back, im_framef_row, zmax, frame_num, val,
+                           out_w=1440, out_h=720):
+    """Fast 2D frame renderer for large stacks: pure numpy/PIL, no matplotlib figure.
+
+    Produces a 3-panel (1x3) colormapped image at the same resolution as the 3D renderer.
+    Used automatically when the stack exceeds ANIM_3D_THRESHOLD frames.
+    """
+    _cmap = cm.bwr
+    pw, ph = out_w // 3, out_h
+
+    def to_rgb(arr):
+        normed = np.clip(arr / (zmax + 1e-9), 0, 1)
+        return (_cmap(normed)[:, :, :3] * 255).astype(np.uint8)
+
+    panels = [np.array(Image.fromarray(to_rgb(a)).resize((pw, ph), Image.BILINEAR))
+              for a in [im_orig, im_back, im_framef_row]]
+
+    out = np.empty((out_h, out_w, 3), dtype=np.uint8)
+    out[:, 0:pw]        = panels[0]
+    out[:, pw:2*pw]     = panels[1]
+    out[:, 2*pw:out_w]  = panels[2]
+
+    pil  = Image.fromarray(out)
+    draw = ImageDraw.Draw(pil)
+    minmax = int(np.amax(im_back) - np.amin(im_back))
+    titles = [
+        "{} Frame: {}".format(val.capitalize(), frame_num + 1),
+        "Min to Max (Background): {}".format(minmax),
+        "Background Subtracted Image",
+    ]
+    for j, title in enumerate(titles):
+        draw.text((j * pw + 8, 6), title, fill=(0, 0, 0))
+    return np.array(pil)
+
+
 # Create animation of background subtraction
 def background_animation(verbose, stack, work_out_path, frange):
     """Render background subtraction animation and write MP4 (H.264) via imageio + ffmpeg."""
@@ -127,23 +166,35 @@ def background_animation(verbose, stack, work_out_path, frange):
     X1, Y1 = np.int16(np.meshgrid(np.arange(stack.siz2), np.arange(stack.siz1)))
     zmax = float(np.amax(stack.im_origf))
 
-    # Render frames serially — matplotlib 3D rendering holds the GIL throughout,
-    # so ThreadPoolExecutor/ProcessPoolExecutor both run slower than serial.
+    use_3d = len(frange) <= ANIM_3D_THRESHOLD
+
+    if verbose:
+        mode = "3D surface" if use_3d else "2D colormap (>{}f)".format(ANIM_3D_THRESHOLD)
+        print("(Background Animation) Render mode: {}".format(mode))
+
     frames_rgb = []
     for i in range(len(frange)):
-        args = (
-            i, stack.val, frange[i],
-            stack.im_origf[:, :, i],
-            stack.im_backf[:, :, i],
-            stack.im_framef[i, :, :],
-            stack.labelsf[:, i],
-            stack.propf[:, :, i],
-            stack.maskf[:, i],
-            stack.X, stack.Y,
-            X1, Y1, zmax,
-            15., 30., 30., 230.,
-        )
-        frames_rgb.append(_render_anim_frame(args)[1])
+        if use_3d:
+            args = (
+                i, stack.val, frange[i],
+                stack.im_origf[:, :, i],
+                stack.im_backf[:, :, i],
+                stack.im_framef[i, :, :],
+                stack.labelsf[:, i],
+                stack.propf[:, :, i],
+                stack.maskf[:, i],
+                stack.X, stack.Y,
+                X1, Y1, zmax,
+                15., 30., 30., 230.,
+            )
+            frames_rgb.append(_render_anim_frame(args)[1])
+        else:
+            frames_rgb.append(_render_anim_frame_2d(
+                stack.im_origf[:, :, i],
+                stack.im_backf[:, :, i],
+                stack.im_framef[i, :, :],
+                zmax, frange[i], stack.val,
+            ))
 
     # Determine output filename
     if max(np.ediff1d(frange, to_begin=frange[0])) > 1:

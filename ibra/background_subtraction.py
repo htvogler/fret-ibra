@@ -88,7 +88,7 @@ class stack():
         rows = self.height * self.width
         self.im_origf = np.empty((self.siz1, self.siz2, length), dtype=np.uint16)
         self.propf = np.empty((rows, 5, length), dtype=np.float32)
-        self.maskf = np.empty((rows, length), dtype=np.bool)
+        self.maskf = np.empty((rows, length), dtype=bool)
         self.labelsf = np.empty((rows, length), dtype=np.int8)
         self.im_backf = np.empty((self.width, self.height, length), dtype=np.int16)
         self.im_framef = np.empty((length, self.siz1, self.siz2), dtype=np.uint16)

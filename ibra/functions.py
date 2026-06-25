@@ -44,7 +44,7 @@ def _render_anim_frame(args):
     (i, val, frame_num, im_orig, im_back, im_framef_row,
      labels_col, propf_col, mask_col, X, Y, X1, Y1, zmax, elev1, azim1, elev4, azim4) = args
 
-    fig = plt.figure(figsize=(20, 10))
+    fig = plt.figure(figsize=(20, 10), dpi=72)
     ax1 = fig.add_subplot(2, 2, 1, projection='3d')
     ax2 = fig.add_subplot(2, 2, 2, projection='3d')
     ax3 = fig.add_subplot(2, 2, 3, projection='3d')
@@ -120,8 +120,7 @@ def background_animation(verbose, stack, work_out_path, frange):
 
     Each frame is rendered independently in a worker process (spawn-safe,
     no shared matplotlib state). Rendered frames are collected in order and
-    written to AVI via imageio + ffmpeg. Falls back to cv2.VideoWriter if
-    imageio is not available.
+    written to MP4 (H.264) via imageio + ffmpeg.
     """
     import concurrent.futures
 
@@ -166,33 +165,25 @@ def background_animation(verbose, stack, work_out_path, frange):
     results.sort(key=lambda x: x[0])
     frames_rgb = [r[1] for r in results]
 
-    # Determine output filename (same logic as before)
+    # Determine output filename
     if max(np.ediff1d(frange, to_begin=frange[0])) > 1:
         fname_base = work_out_path + '_' + stack.val + '_specific'
         num = 1
-        while os.path.isfile(fname_base + str(num) + '.avi'):
+        while os.path.isfile(fname_base + str(num) + '.mp4'):
             num += 1
-        out_path = fname_base + str(num) + '.avi'
+        out_path = fname_base + str(num) + '.mp4'
     else:
         out_path = (work_out_path + '_' + stack.val + '_frames'
-                    + str(frange[0] + 1) + '_' + str(frange[-1] + 1) + '.avi')
+                    + str(frange[0] + 1) + '_' + str(frange[-1] + 1) + '.mp4')
 
-    # Write AVI — try imageio first (cleaner API), fall back to cv2
-    try:
-        import imageio
-        writer = imageio.get_writer(out_path, fps=2, codec='rawvideo',
-                                    pixelformat='yuv420p', macro_block_size=None)
-        for frame_rgb in frames_rgb:
-            writer.append_data(frame_rgb)
-        writer.close()
-    except (ImportError, Exception):
-        # cv2 fallback — note cv2 expects BGR
-        h, w = frames_rgb[0].shape[:2]
-        fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        out = cv2.VideoWriter(out_path, fourcc, 2, (w, h))
-        for frame_rgb in frames_rgb:
-            out.write(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
-        out.release()
+    # Write MP4 (H.264) via imageio + ffmpeg
+    import imageio
+    writer = imageio.get_writer(out_path, fps=2, codec='libx264',
+                                pixelformat='yuv420p', macro_block_size=None,
+                                output_params=['-crf', '23'])
+    for frame_rgb in frames_rgb:
+        writer.append_data(frame_rgb)
+    writer.close()
 
     # End time
     time_end = timer()

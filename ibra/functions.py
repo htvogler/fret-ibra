@@ -397,7 +397,7 @@ def tiff(data, path):
     """Write out a TIFF stack"""
     with TiffWriter(path, bigtiff=True) as tif:
         for i in range(data.shape[0]):
-            tif.save(data[i,:,:])
+            tif.write(data[i,:,:])
 
 
 def bleach_fit(brange, crange, channeli_dict, fitter):

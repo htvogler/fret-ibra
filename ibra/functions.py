@@ -382,6 +382,10 @@ def detect_freak_frames(channeli_dict, k=5, window=51):
 
     flagged = []
     for i in range(n):
+        # Skip edge frames: rolling median is unreliable within half a window of
+        # the boundary, and edge frames are always checked visually via the animation.
+        if i < half or i >= n - half:
+            continue
         if np.abs(deviation_mad[i]) > k:
             flagged.append({
                 'frame_number':  int(indices[i]) + 1,

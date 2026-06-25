@@ -236,7 +236,18 @@ def h5(data, val, path, frange):
             else:
                 frange_attr = 'ratio_frange'
 
-            orange = f.attrs[frange_attr]
+            # Read stored frange — handle three cases:
+            #   1. new format: stored as a dataset (normal path going forward)
+            #   2. old format: stored as an attribute (files written before this fix)
+            #   3. missing: frange was never written due to a previous crash
+            # Cases 2 and 3 fall back to treating the existing data as a full
+            # replacement so the merge path is skipped and the file is rewritten cleanly.
+            if frange_attr in f:
+                orange = f[frange_attr][:]
+            elif frange_attr in f.attrs:
+                orange = f.attrs[frange_attr]
+            else:
+                orange = frange  # crash remnant — force full replacement
 
             # Fast path: if the incoming frange is identical to the stored frange
             # this is a full replacement — skip the merge entirely, just delete
@@ -268,13 +279,22 @@ def h5(data, val, path, frange):
             res = np.array(data)
             res_range = frange
 
-        # Save the image pixel data and frange
+        # Save the image pixel data and frange.
+        # frange is stored as a dataset (not an attribute) because large stacks
+        # (e.g. 9000 frames) produce arrays that overflow the HDF5 object header
+        # attribute size limit (~64 KB), causing a write crash.
         if val in ('acceptor', 'donor'):
             f.create_dataset(val, data=res, shape=res.shape, dtype=np.uint16, compression='gzip')
-            f.attrs[val + '_frange'] = res_range
+            frange_key = val + '_frange'
+            if frange_key in f:
+                del f[frange_key]
+            f.create_dataset(frange_key, data=np.array(res_range), dtype=np.int64)
         elif val == 'ratio':
             f.create_dataset(val, data=res, shape=res.shape, dtype=np.uint8, compression='gzip')
-            f.attrs[val + '_frange'] = res_range
+            frange_key = val + '_frange'
+            if frange_key in f:
+                del f[frange_key]
+            f.create_dataset(frange_key, data=np.array(res_range), dtype=np.int64)
         else:
             f.create_dataset(val, data=res, shape=res.shape, dtype=np.float16, compression='gzip')
 
@@ -336,6 +356,71 @@ def time_evolution(acceptor, donor, work_out_path, name, ylabel, h5_save, single
 
     plt.savefig(work_out_path + name, bbox_inches='tight')
     plt.close(fig)
+
+
+def detect_freak_frames(channeli_dict, k=5, window=51):
+    """Detect freak frames by comparing each value to its local rolling median.
+
+    Uses median absolute deviation (MAD) of the residuals from a rolling median
+    so that slow bleaching, oscillations, and gradual trends are ignored.
+    Only sharp local outliers — single frames or small clusters that deviate
+    strongly from their immediate neighbourhood — are flagged.
+
+    Args:
+        channeli_dict: dict of {frame_index: median_intensity_value}
+        k:             detection threshold in MAD units (default 5)
+        window:        rolling median half-window in frames (default 51, i.e. ±25 frames)
+                       must be odd; will be forced odd if even value is passed
+    Returns:
+        List of dicts, one per flagged frame:
+            frame_number   (1-based, matching display convention)
+            frame_index    (0-based, raw key from channeli_dict)
+            value          (measured intensity value)
+            local_median   (rolling median at that frame)
+            deviation_mad  (residual expressed in MAD units)
+        Empty list if no frames are flagged.
+    """
+    if window % 2 == 0:
+        window += 1
+    half = window // 2
+
+    # Sort by frame index so the rolling window is meaningful
+    sorted_items = sorted(channeli_dict.items())
+    indices = np.array([x[0] for x in sorted_items])
+    values  = np.array([x[1] for x in sorted_items], dtype=np.float64)
+    n = len(values)
+
+    # Rolling median — reflect at boundaries to avoid edge bias
+    rolling_med = np.empty(n, dtype=np.float64)
+    for i in range(n):
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        rolling_med[i] = np.median(values[lo:hi])
+
+    residuals = values - rolling_med
+
+    # Global MAD of residuals (robust scale estimator)
+    mad = np.median(np.abs(residuals - np.median(residuals)))
+    if mad == 0:
+        # Fallback: use std-based scale if MAD is zero (flat signal)
+        mad = np.std(residuals) * 0.6745  # 0.6745 makes it consistent with Gaussian MAD
+    if mad == 0:
+        return []  # Completely flat signal — nothing to flag
+
+    deviation_mad = residuals / mad
+
+    flagged = []
+    for i in range(n):
+        if np.abs(deviation_mad[i]) > k:
+            flagged.append({
+                'frame_number':  int(indices[i]) + 1,
+                'frame_index':   int(indices[i]),
+                'value':         float(values[i]),
+                'local_median':  float(rolling_med[i]),
+                'deviation_mad': float(deviation_mad[i]),
+            })
+
+    return flagged
 
 
 def block(data, size):

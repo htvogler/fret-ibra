@@ -23,7 +23,9 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
         # Single-channel mode: read acceptor stack and masked median intensities from _back.h5
         try:
             with h5py.File(work_out_path + '_back.h5', 'r') as f3:
-                ratio_frange = np.array(f3.attrs['acceptor_frange'])
+                ratio_frange = (np.array(f3['acceptor_frange'][:]) if 'acceptor_frange' in f3
+                    else np.array(f3.attrs['acceptor_frange']) if 'acceptor_frange' in f3.attrs
+                    else frange)
                 acceptor = np.array(f3['acceptor'])
                 acceptori = dict(zip(ratio_frange, np.array(f3['acceptori'])))
         except KeyError:
@@ -41,7 +43,9 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
             _two_ch_source = 'ratio'
             try:
                 with h5py.File(_ratio_h5, 'r') as f3:
-                    ratio_frange = np.array(f3.attrs['ratio_frange'])
+                    ratio_frange = (np.array(f3['ratio_frange'][:]) if 'ratio_frange' in f3
+                        else np.array(f3.attrs['ratio_frange']) if 'ratio_frange' in f3.attrs
+                        else frange)
                     acceptor  = np.array(f3['acceptor'])
                     donor     = np.array(f3['donor'])
                     acceptori = dict(zip(ratio_frange, np.array(f3['acceptori'])))
@@ -52,7 +56,9 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
             _two_ch_source = 'back'
             try:
                 with h5py.File(_back_h5, 'r') as f3:
-                    ratio_frange = np.array(f3.attrs['acceptor_frange'])
+                    ratio_frange = (np.array(f3['acceptor_frange'][:]) if 'acceptor_frange' in f3
+                        else np.array(f3.attrs['acceptor_frange']) if 'acceptor_frange' in f3.attrs
+                        else frange)
                     acceptor  = np.array(f3['acceptor'])
                     donor     = np.array(f3['donor'])
                     acceptori = dict(zip(ratio_frange, np.array(f3['acceptori'])))
@@ -227,12 +233,16 @@ def ratio(verbose,logger,work_out_path,crop,res,register,union,h5_save,tiff_save
         with h5py.File(work_out_path + '_back.h5', 'r') as f:
             try:
                 acceptor = np.array(f['acceptor'])
-                acceptor_frange = np.array(f.attrs['acceptor_frange'])
+                acceptor_frange = (np.array(f['acceptor_frange'][:]) if 'acceptor_frange' in f
+                                   else np.array(f.attrs['acceptor_frange']) if 'acceptor_frange' in f.attrs
+                                   else frange)
             except:
                 raise ImportError("Acceptor stack background not processed")
             try:
                 donor = np.array(f['donor'])
-                donor_frange = np.array(f.attrs['donor_frange'])
+                donor_frange = (np.array(f['donor_frange'][:]) if 'donor_frange' in f
+                                else np.array(f.attrs['donor_frange']) if 'donor_frange' in f.attrs
+                                else frange)
             except:
                 raise ImportError("Donor stack background not processed")
     except ImportError:
@@ -268,7 +278,9 @@ def ratio(verbose,logger,work_out_path,crop,res,register,union,h5_save,tiff_save
     try:
         # Input files into dictionaries
         with h5py.File(work_out_path + '_ratio_back.h5', 'r') as f2:
-            ratio_frange = np.array(f2.attrs['ratio_frange'])
+            ratio_frange = (np.array(f2['ratio_frange'][:]) if 'ratio_frange' in f2
+                            else np.array(f2.attrs['ratio_frange']) if 'ratio_frange' in f2.attrs
+                            else frange)
             acceptori = dict(list(zip(ratio_frange, np.array(f2['acceptori']))))
             donori = dict(list(zip(ratio_frange, np.array(f2['donori']))))
     except:

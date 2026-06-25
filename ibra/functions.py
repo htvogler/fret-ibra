@@ -380,7 +380,7 @@ def time_evolution(acceptor, donor, work_out_path, name, ylabel, h5_save, single
     plt.close(fig)
 
 
-def detect_freak_frames(channeli_dict, k=5, window=51):
+def detect_freak_frames(channeli_dict, k=10, window=51):
     """Detect freak frames by comparing each value to its local rolling median.
 
     Uses median absolute deviation (MAD) of the residuals from a rolling median

@@ -157,9 +157,17 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
         x0, y0 = crop[0], crop[1]
         x1 = crop[2] if crop[2] != 0 else Xdim
         y1 = crop[3] if crop[3] != 0 else Ydim
-        acceptor = acceptor[:, y0:y1, x0:x1]
-        if not single_channel and donor is not None:
-            donor = donor[:, y0:y1, x0:x1]
+        if x0 >= Xdim or y0 >= Ydim:
+            print(("\nWarning: crop coordinates (x0={}, y0={}) are outside the current frame size "
+                   "({}x{}px). The stack in the .h5 file has already been cropped by a previous "
+                   "module 4 run.\nTo apply different crop coordinates, re-run module 0 (acceptor) "
+                   "or module 1 (donor) first to regenerate the full background-subtracted stack, "
+                   "then re-run module 4 with the new crop.\nSkipping crop — output will be "
+                   "uncropped.").format(x0, y0, Xdim, Ydim))
+        else:
+            acceptor = acceptor[:, y0:y1, x0:x1]
+            if not single_channel and donor is not None:
+                donor = donor[:, y0:y1, x0:x1]
 
     # Save bleach corrected output
     if (h5_save or tiff_save):

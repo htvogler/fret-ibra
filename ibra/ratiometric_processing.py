@@ -172,15 +172,16 @@ def bleach(verbose,logger,work_out_path,acceptor_bound,donor_bound,fitter,h5_sav
     # Save bleach corrected output
     if (h5_save or tiff_save):
         if single_channel:
-            # Single-channel: save corrected acceptor stack back to _back.h5 and TIFF
+            # Single-channel: save cropped+bleach-corrected stack as /acceptor_bleach in _back.h5,
+            # leaving /acceptor (full-frame) untouched so module 4 can be re-run with a different crop.
             if (h5_save):
                 h5_time_start = timer()
-                h5(acceptor,'acceptor',work_out_path+'_back.h5',frange)
+                h5(acceptor,'acceptor_bleach',work_out_path+'_back.h5',frange)
                 with h5py.File(work_out_path+'_back.h5','a') as _f:
                     _f.attrs['bleach_corrected'] = True
                 h5_time_end = timer()
                 if (verbose):
-                    print("Saving bleach corrected Acceptor stack in " + work_out_path+'_back.h5' + ' [Time: ' + str(int(h5_time_end - h5_time_start) + 1) + " second(s)]")
+                    print("Saving bleach corrected Acceptor stack as /acceptor_bleach in " + work_out_path+'_back.h5' + ' [Time: ' + str(int(h5_time_end - h5_time_start) + 1) + " second(s)]")
             if (tiff_save):
                 tiff_time_start = timer()
                 tiff(acceptor, work_out_path + '_acceptor_back_bleach.tif')

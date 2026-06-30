@@ -36,35 +36,33 @@ class stack():
 
     # Set frame parameters as instance variables
     def set_frame_parameters(self, win):
-        # Test to find suggested values of nwindow
-        if (self.siz1 <= 1400 or self.siz2 <= 1400):
-            win_test = range(20, 37, 4)
-        else:
-            win_test = range(24, 41, 4)
-
-        win_res = [0] * 4
-        for winn, winc in enumerate(win_test):
-            if (self.siz2 % winc == 0 and self.siz1 % (self.siz2 // winc) == 0):
-                win_res[winn] = 1
-
-        sug = win_test[win_res.index(1)]
-
         # Check nwindows parameter
         # dim = image_width / nwindow (tile size in pixels). Both axes must be
         # divisible by dim so the block() reshape works. siz2 % win == 0 guarantees
         # dim is an integer; siz1 % dim == 0 is the actual reshape requirement
         # (NOT siz1 % win == 0, which is a stricter and incorrect check).
-        dim_candidate = self.siz2 // win
-        ass_str1w = (f"image width ({self.siz2}px) must be divisible by nwindow={win} "
-                     f"(suggested value: {sug})")
-        ass_str1h = (f"image height ({self.siz1}px) must be divisible by tile size "
-                     f"{dim_candidate}px (= width {self.siz2} / nwindow {win}). "
-                     f"Crop height to a multiple of {dim_candidate}px.")
-        ass_str2 = f"nwindows should be increased (suggested value: {sug})"
-        assert (self.siz2 % win == 0), ass_str1w
-        assert (self.siz1 % dim_candidate == 0), ass_str1h
-        assert (self.siz1 / win <= 80.0), ass_str2
-        assert (self.siz2 / win <= 80.0), ass_str2
+        dim_candidate = self.siz2 // win if win > 0 else 0
+
+        def _suggest():
+            win_test = range(20, 37, 4) if (self.siz1 <= 1400 or self.siz2 <= 1400) else range(24, 41, 4)
+            for winc in win_test:
+                if self.siz2 % winc == 0 and self.siz1 % (self.siz2 // winc) == 0:
+                    return winc
+            return None
+
+        assert (self.siz2 % win == 0), (
+            f"image width ({self.siz2}px) must be divisible by nwindow={win}"
+            + (f" (suggested value: {_suggest()})" if _suggest() else ""))
+        assert (self.siz1 % dim_candidate == 0), (
+            f"image height ({self.siz1}px) must be divisible by tile size "
+            f"{dim_candidate}px (= width {self.siz2} / nwindow {win}). "
+            f"Crop height to a multiple of {dim_candidate}px.")
+        assert (self.siz1 / win <= 80.0), (
+            f"nwindows should be increased"
+            + (f" (suggested value: {_suggest()})" if _suggest() else ""))
+        assert (self.siz2 / win <= 80.0), (
+            f"nwindows should be increased"
+            + (f" (suggested value: {_suggest()})" if _suggest() else ""))
 
         # Find frame size and set window size
         self.dim = np.int16(self.siz2 / win)

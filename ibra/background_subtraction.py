@@ -8,6 +8,7 @@ from __future__ import print_function, division
 
 import numpy as np
 import scipy as sp
+from scipy import ndimage
 from scipy.interpolate import griddata
 from sklearn.cluster import DBSCAN
 import cv2
@@ -82,12 +83,16 @@ class stack():
     # Note: logger is intentionally excluded — it is not picklable and must not be
     # passed to worker processes. Logging is handled by the main process after
     # results are collected.
-    def set_class_constants(self, verbose, res, logger, frange, eps):
+    def set_class_constants(self, verbose, res, logger, frange, eps, declutter_radius=0,
+                             background_method='dbscan', tophat_size=0):
         self.verbose = verbose
         self.res = res
         self.logger = logger
         self.frange = frange
         self.eps = eps
+        self.declutter_radius = declutter_radius
+        self.background_method = background_method
+        self.tophat_size = tophat_size
 
     # Preallocate arrays for speed
     def metric_prealloc(self):
@@ -112,11 +117,14 @@ class stack():
 
     # Use log file to print frame metrics
     def logger_update(self, h5_save, time_elapsed):
+        declutter_note = ', declutter_radius: ' + str(self.declutter_radius)
+        if self.background_method != 'dbscan':
+            declutter_note += ', background_method: ' + self.background_method + ', tophat_size: ' + str(self.tophat_size)
         if (max(np.ediff1d(self.frange, to_begin=self.frange[0])) > 1):
-            self.logger.info('(Background Subtraction) ' + self.val + '_eps: ' + str(self.eps) + ', frames: ' + ",".join(
+            self.logger.info('(Background Subtraction) ' + self.val + '_eps: ' + str(self.eps) + declutter_note + ', frames: ' + ",".join(
                 map(str, [x + 1 for x in self.frange])) + ', time: ' + time_elapsed + ' sec, save: ' + str(h5_save))
         else:
-            self.logger.info('(Background Subtraction) ' + self.val + '_eps: ' + str(self.eps) + ', frames: ' + str(self.frange[0] + 1) + '-' + str(
+            self.logger.info('(Background Subtraction) ' + self.val + '_eps: ' + str(self.eps) + declutter_note + ', frames: ' + str(self.frange[0] + 1) + '-' + str(
                 self.frange[-1] + 1) + ', time: ' + time_elapsed + ' sec, save: ' + str(h5_save))
 
     # Run background subtraction stack workflow
@@ -125,7 +133,15 @@ class stack():
         # exceeds the threshold. Below the threshold, process spawn overhead
         # (bootstrapping worker processes) exceeds the parallelisation benefit.
         PARALLEL_FRAME_THRESHOLD = 60
-        use_parallel = parallel and len(self.frange) > PARALLEL_FRAME_THRESHOLD
+        # background_method='tophat' is cheap enough (~4ms/frame measured, vs
+        # ~850ms/frame for dbscan's per-tile moment loop + clustering) that the
+        # fixed per-frame IPC cost of dispatching to a worker process (pickling
+        # the frame array across process boundaries) exceeds its own compute
+        # cost at any frame count, not just below PARALLEL_FRAME_THRESHOLD --
+        # confirmed on real data: a 200-frame run took 37s with parallel=1 vs
+        # 5s with parallel=0, the opposite of what parallel=1 is meant to buy.
+        # Always run tophat serially regardless of the parallel cfg setting.
+        use_parallel = parallel and len(self.frange) > PARALLEL_FRAME_THRESHOLD and self.background_method != 'tophat'
 
         if use_parallel:
             # Ensure spawn start method is used for cross-platform compatibility.
@@ -156,6 +172,9 @@ class stack():
                 verbose=self.verbose,
                 res=self.res,
                 eps=self.eps,
+                declutter_radius=self.declutter_radius,
+                background_method=self.background_method,
+                tophat_size=self.tophat_size,
             )
 
             # Submit one job per frame
@@ -187,7 +206,8 @@ class stack():
 # Replaces the class-variable pattern which breaks under spawn.
 class _FrameParams:
     __slots__ = ('val', 'siz1', 'siz2', 'dim', 'height', 'width',
-                 'X', 'Y', 'XY', 'dist_grid', 'verbose', 'res', 'eps')
+                 'X', 'Y', 'XY', 'dist_grid', 'verbose', 'res', 'eps',
+                 'declutter_radius', 'background_method', 'tophat_size')
 
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
@@ -210,6 +230,27 @@ class frame():
         self.count = count
         self.pos = pos
         self.params = params
+
+    # Suppress thin, static, high-contrast artifacts (e.g. reflective/fluorescent
+    # device edges — microchannel walls, chip fiducials) before tile statistics
+    # are computed. These share the same per-tile variance/skew/median signature
+    # as real signal at the tile resolution `properties()`/`clustering()` operate
+    # on, so DBSCAN cannot separate them no matter how eps is tuned — but they are
+    # reliably much narrower than genuine signal (a cell, a growing tube). Grayscale
+    # morphological opening with a disk narrower than the real signal but wider
+    # than the artifact removes anything that can't contain the disk anywhere along
+    # its length, at native pixel resolution, with no dependence on how long a given
+    # pixel has carried real signal (unlike a temporal/per-pixel-history approach,
+    # which misclassifies a permanently-occupied pixel as static background).
+    # No-op when declutter_radius is 0 (default) — off unless explicitly requested.
+    def declutter(self):
+        p = self.params
+        r = p.declutter_radius
+        if not r:
+            return
+        y, x = np.ogrid[-r:r + 1, -r:r + 1]
+        footprint = (x ** 2 + y ** 2) <= r ** 2
+        self.im_frame = ndimage.grey_opening(self.im_frame, footprint=footprint)
 
     # Calculate pixel properties per tile
     def properties(self):
@@ -270,6 +311,56 @@ class frame():
             self.XY_interp_back = np.zeros((p.width, p.height))
             self.dbscan_error = self.count
 
+    # Alternative to properties()+clustering()+subtraction(): estimate the
+    # background via a single large-radius grayscale morphological opening
+    # instead of per-tile DBSCAN classification. A structuring element wider
+    # than any real signal in the frame can never "fit inside" that signal, so
+    # the opening always reaches past it into genuinely surrounding pixels --
+    # the background estimate at any point is built entirely from real
+    # background, structurally, regardless of how bright or dim the real signal
+    # there happens to be. This makes it immune to two failure modes the tile/
+    # DBSCAN method has for a thin, persistent structure (e.g. a growing tube):
+    # (1) a tile partially covered by real signal getting its own inflated
+    # median used as background, corrupting the whole tile block; (2) DBSCAN
+    # correctly recognising real signal as statistically distinct from
+    # background, but the *interpolated* background value substituted for it
+    # still nearly matching the signal's own brightness once that margin has
+    # eroded (e.g. from photobleaching over a long timelapse) -- neither
+    # failure depends on tile size or eps, both were confirmed on real data
+    # (HV202_1_14, see the fret-ibra session notes), and this method sidesteps
+    # both by never needing to classify anything in the first place.
+    #
+    # Only valid for real signal narrower than tophat_size -- NOT a general
+    # replacement for the DBSCAN method, which is why this is opt-in
+    # (background_method='tophat') rather than the default. A real foreground
+    # region *wider* than tophat_size (e.g. a root cross-section, bulk
+    # cytoplasmic signal) would get treated as background and erased -- the
+    # DBSCAN method has no such width assumption and remains the right default
+    # for those sample types.
+    def tophat_subtraction(self):
+        p = self.params
+        bg = ndimage.grey_opening(self.im_frame, size=p.tophat_size)
+        tophat = self.im_frame.astype(np.float32) - bg.astype(np.float32)
+        tophat[tophat < 0] = 0
+        self.im_frame = tophat
+        self.dbscan_error = None
+
+        # Downsample the actual background estimate to the tile grid, purely
+        # for the existing animation's "background surface" panel -- real
+        # numbers, unlike the placeholders below.
+        bg_tiles = block(bg, p.dim)
+        self.XY_interp_back = np.uint16(
+            bg_tiles.reshape(bg_tiles.shape[0], -1).mean(axis=1)
+        ).reshape(p.width, p.height)
+
+        # Placeholders only: DBSCAN diagnostics (per-tile stats/labels/core
+        # mask) don't apply to this method, but metric_update/
+        # background_animation still expect arrays of these shapes.
+        n_tiles = p.width * p.height
+        self.tile_prop = np.zeros((n_tiles, 5), dtype=np.float32)
+        self.core_samples_mask = np.zeros(n_tiles, dtype=bool)
+        self.labels = np.zeros(n_tiles, dtype=np.int8)
+
     # Apply bilateral smoothing filter to preserve edges
     def filter(self):
         p = self.params
@@ -283,9 +374,13 @@ class frame():
         p = self.params
         if p.verbose:
             print((p.val.capitalize() + ' (Background Subtraction) Frame Number: ' + str(self.count + 1)))
-        self.properties()
-        self.clustering()
-        self.subtraction()
+        self.declutter()
+        if p.background_method == 'tophat':
+            self.tophat_subtraction()
+        else:
+            self.properties()
+            self.clustering()
+            self.subtraction()
         self.filter()
 
         # Result tuple: pos, im_orig, XY_interp_back, im_frame, tile_prop,
@@ -320,8 +415,120 @@ def _compute_channeli(im_frame, res_local):
     return (channeli, nz)
 
 
+# Number of frames sampled across the requested range to auto-estimate a
+# declutter radius (see _estimate_declutter_radius). Evenly spaced, not the
+# full stack — cheap enough to run on every declutter_auto request even for
+# multi-thousand-frame stacks, and 30 frames already gives thousands of pooled
+# skeleton-width readings in practice, far more than needed for a stable Otsu split.
+DECLUTTER_AUTO_SAMPLE_FRAMES = 30
+
+# Minimum pooled width samples required before trusting an Otsu split at all —
+# below this there isn't enough data to distinguish a real bimodal population
+# from noise.
+DECLUTTER_AUTO_MIN_SAMPLES = 200
+
+# Required ratio between the wide cluster's low end and the narrow cluster's
+# high end for the two to count as "clearly separated". Below this ratio the
+# two populations aren't confidently distinct enough to place a radius between
+# them safely.
+DECLUTTER_AUTO_MIN_SEPARATION_RATIO = 1.5
+
+
+def _estimate_declutter_radius(im_stack, sample_frame_indices):
+    """Estimate a declutter radius from a sample of raw frames, with no
+    per-frame human judgement call about which frame is "representative".
+
+    Approach: in each sampled frame, isolate bright ridge-like structures from
+    the smooth illumination background via a white top-hat filter, then record
+    a local-width reading (2x the Euclidean distance transform) at every
+    skeleton pixel of the resulting mask. Pool these readings across all
+    sampled frames with NO attempt to label any specific connected component
+    as "the real signal" — an earlier version of this did exactly that (take
+    the single largest connected component as the tube) and it broke on a real
+    frame where the tube itself was split into two similarly-sized mask pieces
+    by a local dip in brightness, a real and unavoidable segmentation ambiguity,
+    not a rare edge case. Pooling every skeleton pixel's width regardless of
+    which component it belongs to sidesteps that: a static, thin, high-contrast
+    device artifact (e.g. a microchannel wall) and a genuine growing signal (e.g.
+    a tube) each occupy their own tight width range, and a real artifact/signal
+    pair shows up as two well-separated clusters in the pooled distribution
+    across thousands of readings, regardless of any single frame's own
+    connectivity being fragmented.
+
+    Finds the natural split between the two clusters via Otsu's method (the
+    same technique already used elsewhere in this module for intensity
+    thresholding) applied to the pooled width values instead of pixel
+    intensities. Requires the split to be both well-populated and cleanly
+    separated (see the DECLUTTER_AUTO_* constants above) before trusting it —
+    an ambiguous or single-population distribution means there's no reliable
+    basis for a radius, and this fails safe to 0 (disabled) rather than
+    guessing, since a wrong automatic radius could silently erode real signal
+    or leave the artifact untouched with no visible warning that it happened.
+
+    Returns (radius: int, info: dict) — info always has a 'reason' key
+    explaining the outcome, plus supporting numbers when a radius was found.
+    """
+    from skimage.morphology import skeletonize
+    from skimage.filters import threshold_otsu
+
+    widths = []
+    for idx in sample_frame_indices:
+        fr = np.asarray(im_stack[idx]).astype(np.float32)
+        # Top-hat size (31) is a fixed, generous multiple of the width range
+        # this function is designed to separate (a handful of px vs a few tens
+        # of px) — large enough to strip smooth illumination gradients without
+        # touching either cluster of genuine ridge structures.
+        bg = ndimage.grey_opening(fr, size=31)
+        tophat = fr - bg
+        tophat[tophat < 0] = 0
+        if not np.any(tophat):
+            continue
+        thr = np.percentile(tophat, 97)
+        mask = tophat > thr
+        if not mask.any():
+            continue
+        dist = ndimage.distance_transform_edt(mask)
+        skel = skeletonize(mask)
+        if skel.any():
+            widths.append(2 * dist[skel])
+
+    if not widths:
+        return 0, {'reason': 'no bright ridge-like structures found in sampled frames'}
+
+    widths = np.concatenate(widths)
+    if widths.size < DECLUTTER_AUTO_MIN_SAMPLES:
+        return 0, {'reason': 'too few width samples ({}) to estimate reliably'.format(widths.size)}
+
+    otsu_diameter = float(threshold_otsu(widths.astype(np.float64)))
+    below = widths[widths < otsu_diameter]
+    above = widths[widths >= otsu_diameter]
+
+    if below.size == 0 or above.size == 0:
+        return 0, {'reason': 'no bimodal separation found — single population of widths'}
+
+    narrow_p90 = float(np.percentile(below, 90))
+    wide_p10 = float(np.percentile(above, 10))
+
+    info = {
+        'n_frames_sampled': len(sample_frame_indices),
+        'n_width_samples': int(widths.size),
+        'otsu_diameter': otsu_diameter,
+        'narrow_cluster_p90': narrow_p90,
+        'wide_cluster_p10': wide_p10,
+    }
+
+    if wide_p10 < narrow_p90 * DECLUTTER_AUTO_MIN_SEPARATION_RATIO:
+        info['reason'] = 'narrow/wide width clusters not clearly separated'
+        return 0, info
+
+    info['reason'] = 'ok'
+    return max(1, round(otsu_diameter / 2)), info
+
+
 def background(verbose, logger, work_inp_path, work_out_path, ext, res, module, eps, win,
-               parallel, anim_save, h5_save, tiff_save, frange, single_channel=False):
+               parallel, anim_save, h5_save, tiff_save, frange, single_channel=False,
+               declutter_radius=0, declutter_auto=False, background_method='dbscan',
+               tophat_size=0):
     # Determine channel label from module and single_channel flag
     # In single-channel mode, always label output 'acceptor' so downstream tools find it under the standard key
     if single_channel or module == 0:
@@ -341,8 +548,32 @@ def background(verbose, logger, work_inp_path, work_out_path, ext, res, module, 
     # Assign frame parameters
     all.set_frame_parameters(win)
 
+    # Auto-estimate the declutter radius from a sample of raw frames, overriding
+    # any manually-set declutter_radius for this run. Falls back to whatever
+    # declutter_radius was passed in (0 by default) if no reliable estimate can
+    # be found — see _estimate_declutter_radius for why that can happen.
+    if declutter_auto:
+        n_sample = min(DECLUTTER_AUTO_SAMPLE_FRAMES, len(frange))
+        sample_positions = np.linspace(0, len(frange) - 1, n_sample).astype(int)
+        sample_frame_indices = np.unique(frange[sample_positions])
+        estimated_radius, info = _estimate_declutter_radius(all.im_stack, sample_frame_indices)
+        if estimated_radius:
+            declutter_radius = estimated_radius
+            logger.info('(Background Subtraction) ' + val + ' declutter_auto: estimated radius '
+                        + str(estimated_radius) + ' ' + str(info))
+            if verbose:
+                print((val.capitalize() + ' (Background Subtraction) declutter_auto: estimated radius {} ({})'
+                      .format(estimated_radius, info)))
+        else:
+            logger.info('(Background Subtraction) ' + val + ' declutter_auto: no reliable radius found ('
+                        + info.get('reason', '') + '), falling back to declutter_radius=' + str(declutter_radius))
+            if verbose:
+                print((val.capitalize() + ' (Background Subtraction) declutter_auto: no reliable radius found ({}), '
+                      'falling back to declutter_radius={}'.format(info.get('reason', ''), declutter_radius)))
+
     # Assign class constants
-    all.set_class_constants(verbose, res, logger, frange, eps)
+    all.set_class_constants(verbose, res, logger, frange, eps, declutter_radius,
+                             background_method, tophat_size)
 
     # Preallocation of tile metrics
     all.metric_prealloc()

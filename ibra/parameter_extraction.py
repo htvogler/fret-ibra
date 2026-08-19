@@ -132,6 +132,56 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
         win = int(config['Background Parameters'].get('nwindow'))
         eps = float(config['Background Parameters'].get('eps'))
 
+        # Radius (px) of the disk used for a pre-DBSCAN grayscale morphological
+        # opening that suppresses thin, static, high-contrast artifacts (e.g.
+        # reflective/fluorescent microchannel-device edges) which share the same
+        # per-tile statistics as real signal at this resolution. 0/empty (default)
+        # disables it — opt-in, since it changes pixel values before every
+        # downstream step. Pick a radius between the artifact's width and the
+        # real signal's width (e.g. via a quick top-hat + distance-transform
+        # measurement on one frame) — it is not a universal constant.
+        declutter_raw = config['Background Parameters'].get('declutter_radius', '').strip()
+        declutter_radius = int(declutter_raw) if declutter_raw else 0
+        assert (declutter_radius >= 0), "declutter_radius must be a non-negative integer (0 disables it)"
+
+        # When enabled, the radius above is ignored and instead estimated per-run
+        # from a sample of raw frames (see _estimate_declutter_radius in
+        # background_subtraction.py) — removes the need to hand-pick a
+        # "representative" frame and measure it manually on every new stack.
+        # Falls back to declutter_radius above if no reliable estimate is found.
+        declutter_auto_raw = config['Background Parameters'].get('declutter_auto', '').strip()
+        declutter_auto = declutter_auto_raw.lower() in ('1', 'yes', 'true', 'on')
+
+        # Which algorithm estimates the background. 'dbscan' (default) is the
+        # original per-tile clustering method and remains correct for sample
+        # types where real signal can be wider than any one tile (roots, bulk
+        # cytoplasmic/membrane signal, etc). 'tophat' estimates the background
+        # as a single large grayscale morphological opening instead — a
+        # structuring element wider than the real signal can never fit inside
+        # it, so the background estimate is always built from genuinely
+        # surrounding pixels, never from the signal itself. Only correct for
+        # signal narrower than tophat_size below (e.g. a thin growing tube) —
+        # NOT a general replacement for 'dbscan', which is why it's opt-in.
+        # Independent of declutter_radius/declutter_auto above: decluttering
+        # removes things narrower than the real signal (e.g. a device
+        # artifact), this removes everything wider than it (the background
+        # trend) — different scales, different jobs, usable separately or
+        # together.
+        background_method = config['Background Parameters'].get('background_method', '').strip().lower() or 'dbscan'
+        assert (background_method in ('dbscan', 'tophat')), "background_method must be 'dbscan' or 'tophat'"
+
+        # Radius... rather, size (px) of the morphological opening used to
+        # estimate the background when background_method='tophat'. Must be
+        # comfortably larger than the real signal's own width (e.g. via the
+        # same top-hat + distance-transform measurement used for
+        # declutter_radius) — too small and it erodes the signal itself into
+        # the background estimate; too large and it stops tracking genuine
+        # local illumination variation. Ignored when background_method='dbscan'.
+        tophat_size_raw = config['Background Parameters'].get('tophat_size', '').strip()
+        tophat_size = int(tophat_size_raw) if tophat_size_raw else 0
+        assert (tophat_size >= 0), "tophat_size must be a non-negative integer"
+        assert (background_method != 'tophat' or tophat_size > 0), "tophat_size must be set (> 0) when background_method='tophat'"
+
         assert (win >= 10), "nwindow should be between 10 and 100"
         assert (win <= 100), "nwindow should be between 10 and 100"
         assert (eps > 0), "eps value must be a positive float between 0 and 1"
@@ -141,16 +191,19 @@ def main_extract(cfname,tiff_save,verbose,h5_save,anim_save):
         # Run the background subtraction algorithm for either acceptor or donor stack
         if module <= 1:
             bs.background(verbose, logger, work_inp_path, work_out_path, ext, res, module, eps, win, parallel, anim_save,
-                      h5_save, tiff_save, frange, single_channel=single_channel)
+                      h5_save, tiff_save, frange, single_channel=single_channel, declutter_radius=declutter_radius,
+                      declutter_auto=declutter_auto, background_method=background_method, tophat_size=tophat_size)
         # Automated background + ratio modules
         elif module == 3:
             # Run the background subtraction algorithm for the acceptor stack
             bs.background(verbose, logger, work_inp_path, work_out_path, ext, res, 0, eps, win, parallel, anim_save,
-                          h5_save, tiff_save, frange)
+                          h5_save, tiff_save, frange, declutter_radius=declutter_radius, declutter_auto=declutter_auto,
+                          background_method=background_method, tophat_size=tophat_size)
 
             # Run the background subtraction algorithm for the donor stack
             bs.background(verbose, logger, work_inp_path, work_out_path, ext, res, 1, eps, win, parallel, anim_save,
-                          h5_save, tiff_save, frange)
+                          h5_save, tiff_save, frange, declutter_radius=declutter_radius, declutter_auto=declutter_auto,
+                          background_method=background_method, tophat_size=tophat_size)
 
     # Ratio image module (two-channel only)
     if (module == 2 or module == 3):

@@ -48,6 +48,22 @@ nwindow = 40
 eps = 0.01
 ```
 
+An optional *declutter_radius* parameter (default: 0, disabled) can be set when the sample sits on a static device with its own thin, bright, high-contrast features — e.g. reflective or fluorescent microchannel walls — that are indistinguishable from real signal at the tile level *eps* clustering operates on, but are consistently narrower than it. Setting *declutter_radius* to a pixel radius between the artifact's width and the real signal's width runs a grayscale morphological opening on every frame before clustering, removing the thin artifact while leaving the real signal intact. Leave it at 0 unless you see this specific symptom (thin structured lines surviving background subtraction) — it has no effect on ordinary samples.
+```txt
+declutter_radius = 0
+```
+
+Picking that radius by hand means finding one "representative" frame and measuring it — tedious and a little arbitrary on a stack of thousands of frames, and a single frame can be misleading (e.g. if the real signal happens to be unusually thin or split into separate pieces in that one frame). Setting *declutter_auto* to 1 instead estimates the radius automatically: it samples 30 frames spread across the whole run, measures the local width at every bright-ridge skeleton point in each (regardless of which connected component it belongs to, so a frame where the real signal happens to be fragmented into separate pieces doesn't throw it off), and looks for a natural two-cluster split (via Otsu's method) between narrow artifacts and wide real signal. If the two clusters aren't clearly separated — e.g. there's no such artifact in this sample at all — it logs why and leaves decluttering disabled (or falls back to *declutter_radius* if you set one) rather than guessing. Check the run's log file for the estimated radius and the numbers behind it.
+```txt
+declutter_auto = 0
+```
+
+An optional *background_method* parameter (default: `dbscan`) selects the algorithm used to estimate the background. The default, per-tile DBSCAN clustering described above, assumes nothing about how wide real signal is — correct for samples where it can be wider than one tile (root cross-sections, bulk cytoplasmic/membrane signal). Setting it to `tophat` instead estimates the background as a single large grayscale morphological opening (size *tophat_size*, in px) applied directly to the frame: a structuring element wider than the real signal can never fit inside it, so the background estimate at any point is always built from genuinely surrounding pixels, never from the signal itself. This makes it immune to two failure modes the tile/DBSCAN method has specifically for a *thin*, persistent structure (e.g. a growing tube): a tile partially covered by real signal getting its own inflated median used as background, and DBSCAN correctly telling signal and background apart statistically while the interpolated background value substituted for the signal still nearly matches its own brightness once that margin has eroded (e.g. from photobleaching over a long timelapse — neither failure depends on tile size or eps, and no amount of retuning either one fixes it). *tophat_size* must be set (and comfortably larger than the real signal's own width — measure it the same way as *declutter_radius*, e.g. via a top-hat + distance-transform check on one frame) whenever *background_method* is `tophat`. This is independent of *declutter_radius*/*declutter_auto* above — decluttering removes things *narrower* than real signal (a device artifact), this removes everything *wider* than it (the background trend); use either alone or both together depending on what the sample needs. Only correct for signal narrower than *tophat_size* — leave at `dbscan` unless your sample is a thin, persistent structure and you've confirmed (by comparing outputs) that DBSCAN is corrupting it.
+```txt
+background_method = dbscan
+tophat_size = 0
+```
+
 The background subtraction module can then be run with multiple options including an output HDF5 file (-s) (necessary for further processing), a video animation of per-frame metrics (-a) and a TIFF output file (-t). Option (-e) indicates that all output options are switched on.
 ```bash
 ./ibra.py -c Config_tutorial.cfg -a -t -s -v
